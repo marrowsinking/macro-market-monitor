@@ -1,0 +1,47 @@
+{
+  "name": "macro-market-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0",
+    "build": "next build",
+    "db:init": "tsx scripts/init-db.ts",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx scripts/seed.ts",
+    "fetch:fred": "tsx scripts/fetch-fred.ts",
+    "fetch:yahoo": "tsx scripts/fetch-yahoo.ts",
+    "calculate:regime": "tsx scripts/calculate-regime.ts",
+    "check:alerts": "tsx scripts/check-alerts.ts",
+    "update:data": "npm run fetch:fred && npm run fetch:yahoo && npm run calculate:regime && npm run check:alerts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "date-fns": "^4.1.0",
+    "dotenv": "^17.2.3",
+    "lucide-react": "^0.468.0",
+    "next": "^15.0.3",
+    "prisma": "^7.8.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.13.3",
+    "yahoo-finance2": "^3.15.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.9.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^9.15.0",
+    "eslint-config-next": "^15.0.3",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

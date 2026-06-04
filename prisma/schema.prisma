@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Indicator {
+  id           Int           @id @default(autoincrement())
+  name         String
+  symbol       String        @unique
+  category     String
+  source       String
+  fredSeriesId String?
+  frequency    String
+  description  String
+  macroLogic   String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  observations Observation[]
+  alerts       Alert[]
+}
+
+model Observation {
+  id          Int       @id @default(autoincrement())
+  indicatorId Int
+  date        DateTime
+  value       Float
+  createdAt   DateTime @default(now())
+  indicator   Indicator @relation(fields: [indicatorId], references: [id], onDelete: Cascade)
+
+  @@unique([indicatorId, date])
+  @@index([indicatorId, date])
+}
+
+model MacroRegime {
+  id                Int      @id @default(autoincrement())
+  date              DateTime @unique
+  liquidityScore    Float
+  inflationScore    Float
+  growthScore       Float
+  riskAppetiteScore Float
+  dollarScore       Float
+  creditScore       Float
+  commodityScore    Float
+  chinaScore        Float
+  finalRegime       String
+  summary           String
+  createdAt         DateTime @default(now())
+}
+
+model Alert {
+  id          Int        @id @default(autoincrement())
+  indicatorId Int
+  operator    String
+  threshold   Float
+  message     String
+  severity    String
+  isActive    Boolean    @default(true)
+  triggeredAt DateTime?
+  createdAt   DateTime   @default(now())
+  indicator   Indicator  @relation(fields: [indicatorId], references: [id], onDelete: Cascade)
+}
+
+model Settings {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DataFetchLog {
+  id                           String   @id @default(cuid())
+  provider                     String
+  symbol                       String?
+  indicatorId                  String?
+  status                       String
+  errorType                    String?
+  errorMessage                 String?
+  observationsInserted         Int      @default(0)
+  observationsSkippedDuplicate Int      @default(0)
+  startedAt                    DateTime
+  finishedAt                   DateTime
+  createdAt                    DateTime @default(now())
+}
