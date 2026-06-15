@@ -132,7 +132,11 @@ function normalizationMetadata(input: FactorInput, groupKey: string): Normalizat
     "^NDX": metadata("pct_change", 30, "Nasdaq level trends over time; 30-day percentage change better captures risk appetite momentum.", 30),
     "DX-Y.NYB": metadata("level", 30, "DXY level reflects broad dollar pressure."),
     "JPY=X": metadata("level", 30, "USDJPY level reflects yen pressure and dollar strength."),
-    "CNH=X": metadata("level", 30, "USDCNH level reflects offshore yuan pressure and dollar strength."),
+    "CNY=X": metadata(
+      "level",
+      30,
+      "USDCNY level reflects yuan pressure and broad dollar strength. It is used as an onshore yuan proxy because Yahoo does not provide sufficient long-history CNH data.",
+    ),
     "HG=F": metadata("pct_change", 30, "Copper 30-day percentage change captures industrial commodity momentum.", 30),
     "GC=F": metadata("pct_change", 30, "Gold momentum is context-dependent and may reflect defensive demand rather than commodity cycle strength.", 30),
     "SI=F": metadata("pct_change", 30, "Silver momentum is context-dependent because it contains both industrial and precious-metal characteristics.", 30),
@@ -271,7 +275,7 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1,
         minContribution: -1,
         factors: [
-          { symbol: "DCOILWTICO", name: "WTI Crude Oil", source: "FRED", frequency: "daily_market", role: "secondary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "油價上升可能推高能源通脹壓力。" },
+          { symbol: "DCOILWTICO", name: "WTI Crude Oil", source: "FRED", frequency: "daily_market", role: "secondary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "油價上升可能推高能源通脹壓力。" },
         ],
       },
       {
@@ -347,7 +351,7 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1.5,
         minContribution: -1.5,
         factors: [
-          { symbol: "VIXCLS", name: "VIX", source: "FRED", frequency: "daily_market", role: "primary", direction: "lower_is_positive", scorePolarity: "higher_decreases_score", weight: 1, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "VIX 下降通常代表市場恐慌下降，風險偏好改善。" },
+          { symbol: "VIXCLS", name: "VIX", source: "FRED", frequency: "daily_market", role: "primary", direction: "lower_is_positive", scorePolarity: "higher_decreases_score", weight: 1, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "VIX 下降通常代表市場恐慌下降，風險偏好改善。" },
         ],
       },
       {
@@ -369,8 +373,8 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1,
         minContribution: -1,
         factors: [
-          { symbol: "^GSPC", name: "S&P 500", source: "YAHOO", frequency: "daily_market", role: "confirmation", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "S&P 500 上升通常代表市場願意承擔風險。" },
-          { symbol: "^NDX", name: "Nasdaq 100", source: "YAHOO", frequency: "daily_market", role: "confirmation", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "Nasdaq 100 上升通常代表成長股風險偏好改善。" },
+          { symbol: "^GSPC", name: "S&P 500", source: "YAHOO", frequency: "daily_market", role: "confirmation", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "S&P 500 上升通常代表市場願意承擔風險。" },
+          { symbol: "^NDX", name: "Nasdaq 100", source: "YAHOO", frequency: "daily_market", role: "confirmation", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "Nasdaq 100 上升通常代表成長股風險偏好改善。" },
         ],
       },
       {
@@ -393,7 +397,7 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
     zhName: "美元壓力",
     enName: "Dollar Pressure",
     easyModeSubtitle: "美元是否偏強",
-    professionalDescription: "衡量美元與全球美元流動性壓力，包括 DXY、USDJPY、USDCNH、2年期美債、SOFR 與信用利差。",
+    professionalDescription: "衡量美元與全球美元流動性壓力，包括 DXY、USDJPY、USDCNY、2年期美債、SOFR 與信用利差。",
     methodologyTooltip: "美元壓力不是單純看美元升跌，而是觀察全球美元流動性壓力，以及非美貨幣和美元融資市場是否同時承壓。",
     implementationStatus: "current",
     scoreRangeHint: { min: -4.8, max: 4.8, neutral: 0 },
@@ -407,19 +411,19 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 2,
         minContribution: -2,
         factors: [
-          { symbol: "DX-Y.NYB", name: "DXY", source: "YAHOO", frequency: "daily_market", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "DXY 上升通常代表美元壓力增加。" },
+          { symbol: "DX-Y.NYB", name: "DXY", source: "YAHOO", frequency: "daily_market", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "DXY 上升通常代表美元壓力增加。" },
         ],
       },
       {
         key: "fx_pressure",
         zhName: "非美貨幣壓力",
         enName: "FX Pressure",
-        description: "用 USDJPY 與 USDCNH 觀察非美貨幣壓力。",
+        description: "用 USDJPY 與 USDCNY 觀察非美貨幣壓力；由於 Yahoo 的 CNH 歷史資料不足，暫以 CNY 作為人民幣壓力 proxy。",
         maxContribution: 1.5,
         minContribution: -1.5,
         factors: [
-          { symbol: "JPY=X", name: "USDJPY", source: "YAHOO", frequency: "daily_market", role: "secondary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "USDJPY 上升可能代表日圓承壓或美元利差壓力增加。" },
-          { symbol: "CNH=X", name: "USDCNH", source: "YAHOO", frequency: "daily_market", role: "secondary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "USDCNH 上升可能代表離岸人民幣承壓，亞洲美元壓力增加。" },
+          { symbol: "JPY=X", name: "USDJPY", source: "YAHOO", frequency: "daily_market", role: "secondary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "USDJPY 上升可能代表日圓承壓或美元利差壓力增加。" },
+          { symbol: "CNY=X", name: "USDCNY", source: "YAHOO", frequency: "daily_market", role: "secondary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "USDCNY 上升代表人民幣兌美元壓力增加；由於 Yahoo 的 CNH 歷史資料不足，暫以 CNY 作為人民幣壓力 proxy。" },
         ],
       },
       {
@@ -494,8 +498,8 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 2,
         minContribution: -2,
         factors: [
-          { symbol: "HG=F", name: "Copper Futures", source: "YAHOO", frequency: "daily_market", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "銅價上升通常代表工業需求或周期交易改善。" },
-          { symbol: "DCOILWTICO", name: "WTI Crude Oil", source: "FRED", frequency: "daily_market", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "油價上升通常代表能源需求或再通脹壓力增加。" },
+          { symbol: "HG=F", name: "Copper Futures", source: "YAHOO", frequency: "daily_market", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "銅價上升通常代表工業需求或周期交易改善。" },
+          { symbol: "DCOILWTICO", name: "WTI Crude Oil", source: "FRED", frequency: "daily_market", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "油價上升通常代表能源需求或再通脹壓力增加。" },
         ],
       },
       {
@@ -506,9 +510,9 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 0.5,
         minContribution: -0.5,
         factors: [
-          { symbol: "GC=F", name: "Gold Futures", source: "YAHOO", frequency: "daily_market", role: "defensive", direction: "context_dependent", scorePolarity: "context_dependent", weight: 0.3, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "黃金上升可能代表避險、抗通脹或實質利率下降，不一定代表商品週期健康。" },
-          { symbol: "SI=F", name: "Silver Futures", source: "YAHOO", frequency: "daily_market", role: "defensive", direction: "context_dependent", scorePolarity: "context_dependent", weight: 0.3, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "白銀同時有貴金屬與工業屬性，需要結合黃金和銅一起觀察。" },
-          { symbol: "GOLD_SILVER_RATIO", name: "Gold/Silver Ratio", source: "DERIVED", frequency: "derived", role: "defensive", direction: "context_dependent", scorePolarity: "context_dependent", weight: 0.3, preferredZScoreWindows: [30, 60, 120], easyModeExplanation: "金銀比上升通常偏防守，可能代表白銀相對弱或工業需求不足。" },
+          { symbol: "GC=F", name: "Gold Futures", source: "YAHOO", frequency: "daily_market", role: "defensive", direction: "context_dependent", scorePolarity: "context_dependent", weight: 0.3, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "黃金上升可能代表避險、抗通脹或實質利率下降，不一定代表商品週期健康。" },
+          { symbol: "SI=F", name: "Silver Futures", source: "YAHOO", frequency: "daily_market", role: "defensive", direction: "context_dependent", scorePolarity: "context_dependent", weight: 0.3, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "白銀同時有貴金屬與工業屬性，需要結合黃金和銅一起觀察。" },
+          { symbol: "GOLD_SILVER_RATIO", name: "Gold/Silver Ratio", source: "DERIVED", frequency: "derived", role: "defensive", direction: "context_dependent", scorePolarity: "context_dependent", weight: 0.3, preferredZScoreWindows: [60, 120, 252], easyModeExplanation: "金銀比上升通常偏防守，可能代表白銀相對弱或工業需求不足。" },
         ],
       },
     ],

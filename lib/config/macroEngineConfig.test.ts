@@ -31,6 +31,11 @@ function firstWindow(scoreKey: MacroScoreKey, symbol: string) {
   return factor.preferredZScoreWindows[0];
 }
 
+function transformLookback(scoreKey: MacroScoreKey, symbol: string) {
+  const factor = findFactor(scoreKey, symbol);
+  return factor.transformLookbackDays;
+}
+
 describe("macroEngineConfig", () => {
   test("defines exactly 8 score keys in dashboard order", () => {
     expect(macroScoreKeys).toEqual([
@@ -124,9 +129,21 @@ describe("macroEngineConfig", () => {
   });
 
   test("dollar score factors increase dollar pressure score when higher", () => {
-    for (const symbol of ["DX-Y.NYB", "JPY=X", "CNH=X", "DGS2", "SOFR"]) {
+    for (const symbol of ["DX-Y.NYB", "JPY=X", "CNY=X", "DGS2", "SOFR"]) {
       expect(factorPolarity("dollar_score", symbol)).toBe("higher_increases_score");
     }
+  });
+
+  test("dollar score uses CNY=X instead of CNH=X as yuan pressure proxy", () => {
+    const dollarSymbols = getAllFactorsForScore("dollar_score").map((factor) => factor.symbol);
+    const cny = findFactor("dollar_score", "CNY=X");
+
+    expect(dollarSymbols).toContain("CNY=X");
+    expect(dollarSymbols).not.toContain("CNH=X");
+    expect(cny.name).toBe("USDCNY");
+    expect(cny.scorePolarity).toBe("higher_increases_score");
+    expect(cny.signalTransform).toBe("level");
+    expect(cny.preferredZScoreWindows[0]).toBe(60);
   });
 
   test("risk appetite core stress factors decrease risk appetite score when higher", () => {
@@ -271,5 +288,59 @@ describe("macroEngineConfig", () => {
   test("weekly macro factors use the expected first z-score window", () => {
     expect(firstWindow("liquidity_score", "WALCL")).toBe(252);
     expect(firstWindow("growth_score", "ICSA")).toBe(252);
+  });
+
+  test("daily market scored factors with higher minimum observations do not default to 30 calendar days", () => {
+    const dailyMarketFactors = getAllConfiguredFactors().filter(
+      (factor) =>
+        factor.frequency === "daily_market" &&
+        factor.minObservations >= 30 &&
+        factor.scorePolarity !== "not_scored" &&
+        factor.signalTransform !== "not_scored",
+    );
+
+    for (const factor of dailyMarketFactors) {
+      expect(factor.preferredZScoreWindows[0]).toBeGreaterThanOrEqual(60);
+    }
+  });
+
+  test("daily rate scored factors with higher minimum observations do not default to 30 calendar days", () => {
+    const dailyRateFactors = getAllConfiguredFactors().filter(
+      (factor) =>
+        factor.frequency === "daily_rate" &&
+        factor.minObservations >= 30 &&
+        factor.scorePolarity !== "not_scored" &&
+        factor.signalTransform !== "not_scored",
+    );
+
+    for (const factor of dailyRateFactors) {
+      expect(factor.preferredZScoreWindows[0]).toBeGreaterThanOrEqual(60);
+    }
+  });
+
+  test("daily market factors use 60-day rolling z-score windows by default", () => {
+    expect(firstWindow("risk_appetite_score", "VIXCLS")).toBe(60);
+    expect(firstWindow("risk_appetite_score", "^GSPC")).toBe(60);
+    expect(firstWindow("risk_appetite_score", "^NDX")).toBe(60);
+    expect(firstWindow("dollar_score", "DX-Y.NYB")).toBe(60);
+    expect(firstWindow("dollar_score", "JPY=X")).toBe(60);
+    expect(firstWindow("dollar_score", "CNY=X")).toBe(60);
+    expect(firstWindow("commodity_score", "HG=F")).toBe(60);
+    expect(firstWindow("commodity_score", "DCOILWTICO")).toBe(60);
+    expect(firstWindow("commodity_score", "GC=F")).toBe(60);
+    expect(firstWindow("commodity_score", "SI=F")).toBe(60);
+    expect(firstWindow("commodity_score", "GOLD_SILVER_RATIO")).toBe(60);
+    expect(firstWindow("inflation_score", "DCOILWTICO")).toBe(60);
+  });
+
+  test("30-day signal transforms keep transformLookbackDays at 30", () => {
+    expect(transformLookback("risk_appetite_score", "^GSPC")).toBe(30);
+    expect(transformLookback("risk_appetite_score", "^NDX")).toBe(30);
+    expect(transformLookback("commodity_score", "HG=F")).toBe(30);
+    expect(transformLookback("commodity_score", "DCOILWTICO")).toBe(30);
+    expect(transformLookback("commodity_score", "GC=F")).toBe(30);
+    expect(transformLookback("commodity_score", "SI=F")).toBe(30);
+    expect(transformLookback("commodity_score", "GOLD_SILVER_RATIO")).toBe(30);
+    expect(transformLookback("inflation_score", "DCOILWTICO")).toBe(30);
   });
 });
