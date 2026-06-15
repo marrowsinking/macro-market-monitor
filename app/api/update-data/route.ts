@@ -10,7 +10,7 @@ export async function POST() {
     const report = await runFullDataUpdate(prisma);
 
     return NextResponse.json({
-      ok: true,
+      success: true,
       fred: {
         provider: report.fred.provider,
         indicatorsChecked: report.fred.indicatorsChecked,
@@ -30,15 +30,12 @@ export async function POST() {
         errors: report.yahoo.errors,
       },
       finalRegime: report.regime.finalRegime,
-      alerts: {
-        triggered: report.alerts.triggered,
-        inserted: report.alerts.inserted,
-      },
+      alertsCount: report.alerts.triggered,
     });
   } catch (error) {
     return NextResponse.json(
       {
-        ok: false,
+        success: false,
         error: error instanceof Error ? error.message : String(error),
       },
       { status: 500 },

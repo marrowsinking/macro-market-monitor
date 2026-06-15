@@ -1,4 +1,10 @@
 import type { IndicatorStats } from "@/lib/calculateIndicators";
+import {
+  commodityScore as computeCommodityScore,
+  dollarScore as computeDollarScore,
+  inflationScore as computeInflationScore,
+  riskAppetiteScore as computeRiskAppetiteScore,
+} from "@/lib/scores/scoreLogic";
 
 export type MacroRegimeResult = {
   liquidityScore: number;
@@ -85,12 +91,18 @@ function buildSummary(
 ): string {
   const commodityNote =
     isPositive(change30d(map, "GC=F")) && isNegative(change30d(map, "HG=F")) && isNegative(change30d(map, "DCOILWTICO"))
-      ? "黃金上升但銅和原油下跌，偏避險，不是全面商品週期。"
+      ? "黃金偏強可能反映避險或抗通脹需求，但銅和原油未確認商品週期改善。"
       : null;
   const industrialReflationNote =
     isPositive(change30d(map, "HG=F")) && isPositive(change30d(map, "DCOILWTICO")) ? "銅和原油同步上升，工業/能源再通脹確認。" : null;
   const asiaFundingNote =
     isPositive(change30d(map, "DX-Y.NYB")) && isPositive(change30d(map, "CNH=X")) ? "DXY與USDCNH同步上升，亞洲資金壓力增加。" : null;
+  const inflationPressureNote =
+    scores.inflationScore >= 3 ? "通脹壓力由核心通脹、能源價格或長端利率共同推動。" : null;
+  const dollarRiskDoubleCountNote =
+    scores.dollarScore >= 3 && scores.riskAppetiteScore < 0
+      ? "美元壓力與風險偏好可能來自同一條全球流動性收緊主線，需避免重複解讀。"
+      : null;
   const goldSilverNotes: string[] = [];
   if (ratio.latest !== null && ratio.latest > 90) {
     goldSilverNotes.push("金銀比高於90，白銀相對弱，市場偏避險或工業需求不足。");
@@ -102,7 +114,7 @@ function buildSummary(
   } else if (ratio.change30d !== null && ratio.change30d > 0) {
     goldSilverNotes.push("金銀比30日上升，黃金相對白銀轉強，偏避險。");
   }
-  const extraNotes = [asiaFundingNote, industrialReflationNote, commodityNote, ...goldSilverNotes].filter(Boolean);
+  const extraNotes = [asiaFundingNote, industrialReflationNote, commodityNote, inflationPressureNote, dollarRiskDoubleCountNote, ...goldSilverNotes].filter(Boolean);
   const noteSentence = extraNotes.length > 0 ? extraNotes.join(" ") : null;
 
   if (regime === "再通脹交易") {
@@ -174,7 +186,7 @@ function buildSummary(
   if (regime === "商品/黃金強勢模式") {
     return [
       "目前市場偏向商品/黃金強勢模式。",
-      "商品分數偏強，黃金或能源價格正在上行，代表市場可能交易通脹、避險或商品週期改善。",
+      "商品分數偏強主要需要由銅和原油等工業商品確認，黃金上升本身不等於全面商品週期改善。",
       noteSentence ?? "如果原油和長端利率同步上行，再通脹壓力會更明顯。",
       "需要區分黃金避險上漲和全面商品週期上漲，兩者對股票風格的含義不同。",
     ].filter(Boolean).join(" ");
@@ -209,13 +221,8 @@ export function calculateMacroRegime(stats: IndicatorStats[]): MacroRegimeResult
   const highYieldSpreadChange30d = change30d(map, "BAMLH0A0HYM2");
   const oilChange30d = change30d(map, "DCOILWTICO");
   const dxyChange30d = change30d(map, "DX-Y.NYB");
-  const sp500Change30d = change30d(map, "^GSPC");
-  const nasdaq100Change30d = change30d(map, "^NDX");
   const goldChange30d = change30d(map, "GC=F");
-  const silverChange30d = change30d(map, "SI=F");
   const copperChange30d = change30d(map, "HG=F");
-  const usdjpyChange30d = change30d(map, "JPY=X");
-  const usdcnhChange30d = change30d(map, "CNH=X");
 
   const liquidityScore =
     scoreBySign(dgs2Change30d, -1, 1) +
@@ -224,13 +231,7 @@ export function calculateMacroRegime(stats: IndicatorStats[]): MacroRegimeResult
     scoreThreshold(sofrChange30d, 0.1, -1, 1) +
     scoreBySign(highYieldSpreadChange30d, -1, 1);
 
-  const inflationScore =
-    (isPositive(change90d(map, "CPIAUCSL")) ? 1 : 0) +
-    (isPositive(change90d(map, "CPILFESL")) ? 1 : 0) +
-    (isPositive(change90d(map, "PCEPI")) ? 1 : 0) +
-    (isPositive(change90d(map, "PCEPILFE")) ? 1 : 0) +
-    scoreBySign(oilChange30d, 1, -1) +
-    scoreBySign(dgs10Change30d, 0.5, -0.5);
+  const inflationScore = computeInflationScore(map);
 
   const growthScore =
     scoreBySign(change90d(map, "UNRATE"), -1, 1) +
@@ -238,30 +239,15 @@ export function calculateMacroRegime(stats: IndicatorStats[]): MacroRegimeResult
     scoreBySign(change90d(map, "PAYEMS"), 1, -1) +
     scoreBySign(change90d(map, "JTSJOL"), 1, -1);
 
-  const riskAppetiteScore =
-    scoreBySign(sp500Change30d, 1, -1) +
-    scoreBySign(nasdaq100Change30d, 1, -1) +
-    scoreBySign(change30d(map, "VIXCLS"), -1, 1) +
-    scoreBySign(highYieldSpreadChange30d, -1, 1);
+  const dollarScore = computeDollarScore(map);
+  const riskAppetiteScore = computeRiskAppetiteScore(map, dollarScore);
 
   const creditScore =
     scoreBySign(highYieldSpreadChange30d, -2, 2) +
     (latestValue(map, "BAMLH0A0HYM2") !== null && latestValue(map, "BAMLH0A0HYM2")! > 5 ? -1 : 0) +
     (latestValue(map, "BAMLH0A0HYM2") !== null && latestValue(map, "BAMLH0A0HYM2")! < 4 ? 1 : 0);
 
-  const commodityScore =
-    scoreBySign(goldChange30d, 1, -1) +
-    scoreBySign(silverChange30d, 1, -1) +
-    scoreBySign(copperChange30d, 1, -1) +
-    scoreBySign(oilChange30d, 1, -1);
-
-  const dollarScore =
-    scoreBySign(dxyChange30d, 2, -2) +
-    (isPositive(usdjpyChange30d) ? 0.5 : 0) +
-    (isPositive(usdcnhChange30d) ? 0.5 : 0) +
-    scoreBySign(dgs2Change30d, 1, -1) +
-    scoreThreshold(sofrChange30d, 0.1, 1, -1) +
-    scoreBySign(highYieldSpreadChange30d, 1, -1);
+  const commodityScore = computeCommodityScore(map);
 
   const chinaScore = 0;
   const ratio = goldSilverRatioState(map);

@@ -45,3 +45,15 @@ button {
 .mono {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
+
+.dashboard-simple-only {
+  display: none;
+}
+
+html[data-dashboard-mode="simple"] .dashboard-simple-only {
+  display: block;
+}
+
+html[data-dashboard-mode="simple"] .dashboard-professional-only {
+  display: none;
+}

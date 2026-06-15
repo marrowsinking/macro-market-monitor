@@ -77,6 +77,13 @@ export const yahooAssets: YahooAsset[] = [
     description: "離岸人民幣 Yahoo 匯率數據。",
     macroLogic: "上升代表人民幣走弱和中國資產壓力。",
   },
+  {
+    name: "USDCNY",
+    symbol: "CNY=X",
+    category: "外匯",
+    description: "在岸人民幣 Yahoo 匯率數據；由於 Yahoo 的 CNH 歷史資料不足，暫作人民幣壓力 proxy。",
+    macroLogic: "上升代表人民幣兌美元壓力增加，也可作為美元壓力的人民幣 proxy。",
+  },
 ];
 
 function toDateOnly(value: Date | string): string {

@@ -57,7 +57,7 @@ describe("calculateMacroRegime", () => {
       stat("DGS10", { change30d: 0.3 }),
     ]);
 
-    expect(result.inflationScore).toBe(5.5);
+    expect(result.inflationScore).toBe(4);
     expect(result.finalRegime).toBe("再通脹交易");
   });
 
@@ -81,7 +81,7 @@ describe("calculateMacroRegime", () => {
       stat("DX-Y.NYB", { change30d: 1.2 }),
     ]);
 
-    expect(result.riskAppetiteScore).toBe(-2);
+    expect(result.riskAppetiteScore).toBe(-3);
     expect(result.creditScore).toBe(-3);
     expect(result.finalRegime).toBe("避險模式");
   });
@@ -124,6 +124,7 @@ describe("calculateMacroRegime", () => {
       stat("CPIAUCSL", { change90d: 1 }),
       stat("CPILFESL", { change90d: 1 }),
       stat("PCEPI", { change90d: 1 }),
+      stat("DGS10", { change30d: 0.2 }),
     ]);
 
     expect(result.riskAppetiteScore).toBe(4);
@@ -144,7 +145,7 @@ describe("calculateMacroRegime", () => {
       stat("DCOILWTICO", { change30d: 5 }),
     ]);
 
-    expect(result.commodityScore).toBe(4);
+    expect(result.commodityScore).toBe(2);
     expect(result.summary).toContain("白銀相對弱");
     expect(result.summary).toContain("白銀相對黃金轉強");
     expect(result.summary).toContain("工業/能源再通脹確認");
@@ -160,7 +161,7 @@ describe("calculateMacroRegime", () => {
       stat("RRPONTSYD", { change30d: -150 }),
     ]);
 
-    expect(result.riskAppetiteScore).toBe(2);
+    expect(result.riskAppetiteScore).toBe(3);
     expect(result.liquidityScore).toBe(3.5);
     expect(result.finalRegime).toBe("風險偏好模式");
   });
@@ -171,5 +172,70 @@ describe("calculateMacroRegime", () => {
     expect(result.finalRegime).toBe("混合震盪模式");
     expect(result.liquidityScore).toBe(0);
     expect(result.summary).toContain("沒有形成單一清晰主線");
+  });
+
+  test("caps same-family inflation indexes instead of stacking all CPI and PCE series", () => {
+    const result = calculateMacroRegime([
+      stat("CPIAUCSL", { latestValue: 101, change90d: 1 }),
+      stat("PCEPI", { latestValue: 101, change90d: 1 }),
+      stat("CPILFESL", { latestValue: 101, change90d: 1 }),
+      stat("PCEPILFE", { latestValue: 101, change90d: 1 }),
+    ]);
+
+    expect(result.inflationScore).toBe(2.5);
+    expect(result.inflationScore).toBeLessThan(4);
+  });
+
+  test("caps equity downside in risk appetite when dollar pressure is already high", () => {
+    const result = calculateMacroRegime([
+      stat("DX-Y.NYB", { change30d: 2 }),
+      stat("DGS2", { change30d: 0.3 }),
+      stat("^GSPC", { change30d: -100 }),
+      stat("^NDX", { change30d: -200 }),
+    ]);
+
+    expect(result.dollarScore).toBe(3);
+    expect(result.riskAppetiteScore).toBe(-1);
+  });
+
+  test("still lets VIX and credit spreads independently drive risk-off", () => {
+    const result = calculateMacroRegime([
+      stat("VIXCLS", { change30d: 6 }),
+      stat("BAMLH0A0HYM2", { change30d: 0.8, latestValue: 5.2 }),
+    ]);
+
+    expect(result.riskAppetiteScore).toBe(-3);
+    expect(result.finalRegime).toBe("避險模式");
+  });
+
+  test("requires copper and oil to confirm a positive commodity cycle", () => {
+    const result = calculateMacroRegime([
+      stat("HG=F", { change30d: 0.4 }),
+      stat("DCOILWTICO", { change30d: 5 }),
+    ]);
+
+    expect(result.commodityScore).toBe(2);
+    expect(result.finalRegime).toBe("商品/黃金強勢模式");
+  });
+
+  test("does not treat gold strength with weak copper and oil as a positive commodity cycle", () => {
+    const result = calculateMacroRegime([
+      stat("GC=F", { change30d: 150 }),
+      stat("HG=F", { change30d: -0.3 }),
+      stat("DCOILWTICO", { change30d: -4 }),
+    ]);
+
+    expect(result.commodityScore).toBe(-2);
+    expect(result.summary).toContain("黃金偏強可能反映避險或抗通脹需求");
+  });
+
+  test("treats rising gold silver ratio as defensive signal instead of commodity positive", () => {
+    const result = calculateMacroRegime([
+      stat("GC=F", { latestValue: 3000, previousValue: 2500, change30d: 500 }),
+      stat("SI=F", { latestValue: 30, previousValue: 30, change30d: 0 }),
+    ]);
+
+    expect(result.commodityScore).toBe(0);
+    expect(result.summary).toContain("金銀比30日上升");
   });
 });

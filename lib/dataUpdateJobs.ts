@@ -2,13 +2,16 @@ import { subYears } from "date-fns";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { calculateAllIndicatorStats } from "@/lib/calculateIndicators";
 import { evaluateMacroAlerts } from "@/lib/alertEngine";
+import { calculateConfirmedRegime, type ConfirmedRegimeResult } from "@/lib/engines/confirmedRegimeEngine";
 import { calculateMacroRegime, type MacroRegimeResult } from "@/lib/regimeEngine";
 import { createFredFetcher } from "@/lib/providers/fredProvider";
 import { runFetchJob } from "@/lib/providers/fetchJob";
 import type { FetchJobResult } from "@/lib/providers/types";
 import { createYahooFetcher, yahooAssets } from "@/lib/providers/yahooProvider";
 
-export type RegimeCalculationReport = MacroRegimeResult;
+export type RegimeCalculationReport = MacroRegimeResult & {
+  confirmedRegimeState: ConfirmedRegimeResult;
+};
 
 export type AlertCheckReport = {
   triggered: number;
@@ -24,6 +27,48 @@ export type FullDataUpdateReport = {
 };
 
 type Logger = (message: string) => void;
+type RegimeStateDelegate = {
+  findFirst: (args: {
+    where?: Record<string, unknown>;
+    orderBy?: Record<string, "asc" | "desc">;
+  }) => Promise<{
+    confirmedRegime: string;
+    rawRegimeSignal: string;
+    pendingRegime: string | null;
+    pendingConfirmationDays: number;
+    requiredConfirmationDays: number;
+    daysInConfirmedRegime: number;
+    confidence: string;
+  } | null>;
+  upsert: (args: {
+    where: { date: Date };
+    update: {
+      confirmedRegime: string;
+      rawRegimeSignal: string;
+      pendingRegime: string | null;
+      pendingConfirmationDays: number;
+      requiredConfirmationDays: number;
+      daysInConfirmedRegime: number;
+      confidence: string;
+      explanation: string;
+    };
+    create: {
+      date: Date;
+      confirmedRegime: string;
+      rawRegimeSignal: string;
+      pendingRegime: string | null;
+      pendingConfirmationDays: number;
+      requiredConfirmationDays: number;
+      daysInConfirmedRegime: number;
+      confidence: string;
+      explanation: string;
+    };
+  }) => Promise<unknown>;
+};
+
+function regimeStateDelegate(prisma: PrismaClient): RegimeStateDelegate | null {
+  return (prisma as unknown as { regimeState?: RegimeStateDelegate }).regimeState ?? null;
+}
 
 function toDateOnly(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -180,7 +225,57 @@ export async function runRegimeCalculation(prisma: PrismaClient): Promise<Regime
     },
   });
 
-  return regime;
+  const delegate = regimeStateDelegate(prisma);
+  if (!delegate) {
+    return {
+      ...regime,
+      confirmedRegimeState: calculateConfirmedRegime({
+        latestRawRegimeSignal: regime.finalRegime,
+        previousRegimeState: null,
+      }),
+    };
+  }
+
+  const previousState = await delegate.findFirst({
+    where: {
+      date: { lt: date },
+    },
+    orderBy: { date: "desc" },
+  });
+  const confirmedRegimeState = calculateConfirmedRegime({
+    latestRawRegimeSignal: regime.finalRegime,
+    previousRegimeState: previousState,
+  });
+
+  await delegate.upsert({
+    where: { date },
+    update: {
+      confirmedRegime: confirmedRegimeState.confirmedRegime,
+      rawRegimeSignal: confirmedRegimeState.rawRegimeSignal,
+      pendingRegime: confirmedRegimeState.pendingRegime,
+      pendingConfirmationDays: confirmedRegimeState.pendingConfirmationDays,
+      requiredConfirmationDays: confirmedRegimeState.requiredConfirmationDays,
+      daysInConfirmedRegime: confirmedRegimeState.daysInConfirmedRegime,
+      confidence: confirmedRegimeState.confidence,
+      explanation: confirmedRegimeState.explanation,
+    },
+    create: {
+      date,
+      confirmedRegime: confirmedRegimeState.confirmedRegime,
+      rawRegimeSignal: confirmedRegimeState.rawRegimeSignal,
+      pendingRegime: confirmedRegimeState.pendingRegime,
+      pendingConfirmationDays: confirmedRegimeState.pendingConfirmationDays,
+      requiredConfirmationDays: confirmedRegimeState.requiredConfirmationDays,
+      daysInConfirmedRegime: confirmedRegimeState.daysInConfirmedRegime,
+      confidence: confirmedRegimeState.confidence,
+      explanation: confirmedRegimeState.explanation,
+    },
+  });
+
+  return {
+    ...regime,
+    confirmedRegimeState,
+  };
 }
 
 export async function runAlertCheck(prisma: PrismaClient): Promise<AlertCheckReport> {

@@ -17,7 +17,7 @@ npm install
 cp .env.example .env.local
 npx prisma migrate dev --name init
 npm run seed
-npm run fetch:fred
+npm run update:data
 npm run dev
 ```
 
@@ -55,7 +55,7 @@ Settings 頁可以在本地寫入 `.env.local`。保存後需要重啟 `npm run 
 
 - `/`：Dashboard，顯示宏觀總狀態、八個分數、中文 summary 和核心圖表。
 - `/indicators`：所有指標列表，支援分類篩選。
-- `/indicators/[symbol]`：指標詳情，支援 1 年 / 3 年 / 5 年歷史圖表。
+- `/indicators/[id]`：指標詳情，支援 1 年 / 3 年 / 5 年歷史圖表。
 - `/alerts`：建立和查看警報，第一版只顯示「已觸發」。
 - `/settings`：管理本地 API Key。
 
@@ -73,7 +73,65 @@ npm run seed
 npm run fetch:fred
 ```
 
-第一版只拉 `source=FRED` 且有 `fredSeriesId` 的指標。DXY、股指、中國數據等先作為佔位指標保留，後續接 Yahoo Finance / FMP / Nasdaq Data Link / Trading Economics。
+拉取 Yahoo 跨資產數據：
+
+```bash
+npm run fetch:yahoo
+```
+
+每日更新完整流程：
+
+```bash
+npm run update:data
+```
+
+`update:data` 會依序執行 FRED、Yahoo、regime 計算和 alerts 檢查，不會執行 build。
+
+## 本地長期運行
+
+第一次安裝：
+
+```bash
+npm install
+npx prisma migrate dev
+npm run seed
+npm run update:data
+```
+
+正式長期運行前，先停止正在跑的 dev server。不要在 `npm run dev` 還開著時執行 build。
+
+```bash
+# 先在 npm run dev 的終端按 Ctrl+C
+npm run build
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+PM2 會啟動兩個進程：
+
+- `macro-market-monitor`：執行 `npm run start:prod`，用 `0.0.0.0` 對局域網開放。
+- `macro-market-scheduler`：每天早上 8:30 執行資料更新，只跑 fetch / calculate / alerts，不跑 build。
+
+常用 PM2 命令：
+
+```bash
+pm2 status
+pm2 logs macro-market-monitor
+pm2 logs macro-market-scheduler
+pm2 restart macro-market-monitor
+pm2 stop macro-market-monitor
+pm2 stop macro-market-scheduler
+```
+
+如果改了程式碼，正確順序是：
+
+```bash
+pm2 stop macro-market-monitor
+npm run build
+pm2 restart macro-market-monitor
+```
+
+重點：build 前一定先停 dev server，也不要在 dev server 運行時執行 `npm run build`。
 
 ## 常見錯誤
 

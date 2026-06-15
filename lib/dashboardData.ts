@@ -42,9 +42,9 @@ export async function getDashboardData() {
   };
 }
 
-export async function getIndicatorDetail(symbol: string, years: number) {
+export async function getIndicatorDetail(id: number, years: number) {
   const indicator = await prisma.indicator.findUnique({
-    where: { symbol },
+    where: { id },
     include: {
       observations: {
         where: { date: { gte: subYears(new Date(), years) } },

@@ -71,7 +71,7 @@ export function buildDashboardInsights(regime: RegimeLike, stats: IndicatorStats
   }
 
   if (regime.commodityScore > 0) {
-    keyDrivers.push("商品分數偏正，黃金、白銀、銅或原油提供週期支撐。");
+    keyDrivers.push("商品分數偏正，主要由銅和原油等工業商品提供週期支撐。");
   }
 
   if (isUp(map, "^GSPC") || isUp(map, "^NDX")) {
@@ -100,6 +100,14 @@ export function buildDashboardInsights(regime: RegimeLike, stats: IndicatorStats
 
   if (regime.riskAppetiteScore >= 2 && regime.dollarScore >= 2) {
     conflictingSignals.push("風險資產表現較強，但美元壓力也高，這通常不是最舒服的風險偏好環境。");
+  }
+
+  if (regime.dollarScore >= 3 && regime.riskAppetiteScore < 0) {
+    conflictingSignals.push("美元壓力與風險偏好可能來自同一條全球流動性收緊主線，需避免重複解讀。");
+  }
+
+  if (isUp(map, "GC=F") && isDown(map, "HG=F") && isDown(map, "DCOILWTICO")) {
+    conflictingSignals.push("黃金偏強可能反映避險或抗通脹需求，但銅和原油未確認商品週期改善。");
   }
 
   if (regime.finalRegime === "高利率風險偏好環境") {

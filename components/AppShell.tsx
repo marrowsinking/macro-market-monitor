@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { BarChart3, Bell, Gauge, ListFilter, Settings } from "lucide-react";
+import { BarChart3, Bell, BookOpenText, Gauge, ListFilter, Settings } from "lucide-react";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: Gauge },
   { href: "/indicators", label: "Indicators", icon: ListFilter },
   { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/methodology", label: "Methodology / 方法論", icon: BookOpenText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

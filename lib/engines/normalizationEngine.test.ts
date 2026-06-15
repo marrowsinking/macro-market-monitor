@@ -195,7 +195,7 @@ describe("normalizationEngine", () => {
     const result = calculateNormalizedSignal(observations, vix);
 
     expect(result.status).toBe("ok");
-    expect(result.window).toBe(30);
+    expect(result.window).toBe(60);
     expect(result.normalizedSignal).toBeGreaterThan(0);
   });
 

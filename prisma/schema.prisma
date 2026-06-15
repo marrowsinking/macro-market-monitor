@@ -17,6 +17,10 @@ model Indicator {
   frequency    String
   description  String
   macroLogic   String
+  status       String        @default("active")
+  isScoreInput Boolean       @default(false)
+  isCoreIndicator Boolean    @default(false)
+  replacedBy   String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   observations Observation[]
@@ -85,4 +89,19 @@ model DataFetchLog {
   startedAt                    DateTime
   finishedAt                   DateTime
   createdAt                    DateTime @default(now())
+}
+
+model RegimeState {
+  id                       String   @id @default(cuid())
+  date                     DateTime @unique
+  confirmedRegime          String
+  rawRegimeSignal          String
+  pendingRegime            String?
+  pendingConfirmationDays  Int      @default(0)
+  requiredConfirmationDays Int      @default(3)
+  daysInConfirmedRegime    Int      @default(1)
+  confidence               String
+  explanation              String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 }

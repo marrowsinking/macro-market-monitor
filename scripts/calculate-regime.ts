@@ -13,6 +13,12 @@ async function main() {
 
   console.log("Macro regime calculated:");
   console.log(`- finalRegime: ${regime.finalRegime}`);
+  console.log(`- confirmedRegime: ${regime.confirmedRegimeState.confirmedRegime}`);
+  console.log(`- rawRegimeSignal: ${regime.confirmedRegimeState.rawRegimeSignal}`);
+  console.log(`- pendingRegime: ${regime.confirmedRegimeState.pendingRegime ?? "none"}`);
+  console.log(`- pendingConfirmationDays: ${regime.confirmedRegimeState.pendingConfirmationDays}/${regime.confirmedRegimeState.requiredConfirmationDays}`);
+  console.log(`- daysInConfirmedRegime: ${regime.confirmedRegimeState.daysInConfirmedRegime}`);
+  console.log(`- confidence: ${regime.confirmedRegimeState.confidence}`);
   console.log(`- liquidityScore: ${regime.liquidityScore}`);
   console.log(`- inflationScore: ${regime.inflationScore}`);
   console.log(`- growthScore: ${regime.growthScore}`);

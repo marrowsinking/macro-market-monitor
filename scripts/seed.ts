@@ -2,6 +2,7 @@ import { loadEnvConfig } from "@next/env";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
 import { indicatorCatalog } from "../lib/indicatorCatalog";
+import { getIndicatorVisibility } from "../lib/indicators/indicatorVisibility";
 import { yahooAssets } from "../lib/yahoo";
 
 loadEnvConfig(process.cwd());
@@ -11,34 +12,45 @@ const prisma = new PrismaClient({ adapter });
 
 async function main() {
   for (const item of indicatorCatalog) {
+    const visibility = getIndicatorVisibility(item);
+    const data = {
+      ...item,
+      status: visibility.status,
+      isScoreInput: visibility.isScoreInput,
+      isCoreIndicator: visibility.isCoreIndicator,
+      replacedBy: visibility.replacedBy,
+    };
     await prisma.indicator.upsert({
       where: { symbol: item.symbol },
-      update: item,
-      create: item,
+      update: data,
+      create: data,
     });
   }
 
   for (const item of yahooAssets) {
+    const visibility = getIndicatorVisibility({
+      ...item,
+      source: "YAHOO",
+    });
+    const data = {
+      name: item.name,
+      category: item.category,
+      source: "YAHOO",
+      fredSeriesId: null,
+      frequency: "daily",
+      description: item.description,
+      macroLogic: item.macroLogic,
+      status: visibility.status,
+      isScoreInput: visibility.isScoreInput,
+      isCoreIndicator: visibility.isCoreIndicator,
+      replacedBy: visibility.replacedBy,
+    };
     await prisma.indicator.upsert({
       where: { symbol: item.symbol },
-      update: {
-        name: item.name,
-        category: item.category,
-        source: "YAHOO",
-        fredSeriesId: null,
-        frequency: "daily",
-        description: item.description,
-        macroLogic: item.macroLogic,
-      },
+      update: data,
       create: {
-        name: item.name,
         symbol: item.symbol,
-        category: item.category,
-        source: "YAHOO",
-        fredSeriesId: null,
-        frequency: "daily",
-        description: item.description,
-        macroLogic: item.macroLogic,
+        ...data,
       },
     });
   }

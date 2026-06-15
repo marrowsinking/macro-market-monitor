@@ -20,7 +20,8 @@ describe("shadowScoreDebugService", () => {
     expect(symbols.length).toBeGreaterThan(0);
     expect(symbols).toEqual([...symbols].sort());
     expect(new Set(symbols).size).toBe(symbols.length);
-    expect(symbols).toEqual(expect.arrayContaining(["CPIAUCSL", "VIXCLS", "DX-Y.NYB", "BAMLH0A0HYM2", "DCOILWTICO"]));
+    expect(symbols).toEqual(expect.arrayContaining(["CPIAUCSL", "VIXCLS", "DX-Y.NYB", "CNY=X", "BAMLH0A0HYM2", "DCOILWTICO"]));
+    expect(symbols).not.toContain("CNH=X");
     expect(symbols).not.toContain("CHINA_M2");
   });
 

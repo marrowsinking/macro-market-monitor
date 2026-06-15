@@ -3,18 +3,22 @@ import { notFound } from "next/navigation";
 import { IndicatorChart } from "@/components/IndicatorChart";
 import { getIndicatorDetail } from "@/lib/dashboardData";
 import { formatChange, formatDate, formatNumber, trendLabel } from "@/lib/format";
+import { indicatorDetailHref, parseIndicatorIdParam } from "@/lib/indicators/indicatorRoutes";
 
 export default async function IndicatorDetailPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ symbol: string }>;
+  params: Promise<{ id: string }>;
   searchParams: Promise<{ range?: string }>;
 }) {
-  const { symbol } = await params;
+  const { id: rawId } = await params;
   const query = await searchParams;
   const years = query.range === "3y" ? 3 : query.range === "5y" ? 5 : 1;
-  const detail = await getIndicatorDetail(symbol, years);
+  const id = parseIndicatorIdParam(rawId);
+  if (id === null) notFound();
+
+  const detail = await getIndicatorDetail(id, years);
   if (!detail) notFound();
 
   const chartData = detail.indicator.observations.map((item) => ({
@@ -33,7 +37,7 @@ export default async function IndicatorDetailPage({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <Link href="/indicators" className="text-sm text-slate-500 hover:text-market-teal">返回 Indicators</Link>
-          <h1 className="mt-2 text-2xl font-semibold">{detail.indicator.name}</h1>
+          <h1 className="mt-2 text-2xl font-semibold">{detail.indicator.name} <span className="mono text-slate-500">({detail.indicator.symbol})</span></h1>
           <p className="mt-2 text-sm text-slate-500">
             <span className="mono">{detail.indicator.symbol}</span> · {detail.indicator.category} · {detail.indicator.source}
           </p>
@@ -42,7 +46,7 @@ export default async function IndicatorDetailPage({
           {ranges.map((range) => (
             <Link
               key={range.value}
-              href={`/indicators/${detail.indicator.symbol}?range=${range.value}`}
+              href={indicatorDetailHref(detail.indicator, range.value)}
               className={`rounded-md border px-3 py-1.5 text-sm ${years === Number(range.value[0]) ? "border-market-teal/60 bg-market-teal/10 text-market-teal" : "border-white/10 text-slate-400 hover:text-white"}`}
             >
               {range.label}

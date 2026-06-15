@@ -1,0 +1,4 @@
+ALTER TABLE "Indicator" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE "Indicator" ADD COLUMN "isScoreInput" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Indicator" ADD COLUMN "isCoreIndicator" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Indicator" ADD COLUMN "replacedBy" TEXT;

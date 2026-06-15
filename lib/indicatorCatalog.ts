@@ -7,6 +7,10 @@ export type IndicatorSeed = {
   frequency: string;
   description: string;
   macroLogic: string;
+  status?: "active" | "placeholder" | "disabled" | "deprecated";
+  isScoreInput?: boolean;
+  isCoreIndicator?: boolean;
+  replacedBy?: string | null;
 };
 
 export const categories = [
