@@ -53,12 +53,15 @@ async function loadShadowScores(options: {
   }
 
   const observationsBySymbol = buildObservationSeriesMap(rows);
-  return createShadowScoreDebugPayload({
+  return {
     observationsBySymbol,
-    requestedSymbols,
-    availableSymbols: Object.keys(observationsBySymbol),
-    options,
-  });
+    payload: createShadowScoreDebugPayload({
+      observationsBySymbol,
+      requestedSymbols,
+      availableSymbols: Object.keys(observationsBySymbol),
+      options,
+    }),
+  };
 }
 
 async function loadCurrentV1Scores() {
@@ -92,7 +95,7 @@ export async function GET(request: Request) {
 
   try {
     const shadow = await loadShadowScores({ preferredWindow, zScoreForFullSignal });
-    const warnings = [...shadow.warnings];
+    const warnings = [...shadow.payload.warnings];
     let v1:
       | Awaited<ReturnType<typeof loadCurrentV1Scores>>
       | {
@@ -122,11 +125,12 @@ export async function GET(request: Request) {
           source: v1.source,
           scores: v1.scores,
         },
-        v2Scores: shadow.scores,
+        v2Scores: shadow.payload.scores,
         options: {
           preferredWindow,
           zScoreForFullSignal,
         },
+        observationsBySymbol: shadow.observationsBySymbol,
         warnings,
       }),
     );

@@ -29,8 +29,29 @@ function badgeClass(tone: DebugStatusTone): string {
 
 function directionTone(direction: DirectionAgreement): DebugStatusTone {
   if (direction === "same_positive" || direction === "same_negative" || direction === "both_neutral") return "green";
-  if (direction === "opposite") return "amber";
+  if (direction === "true_opposite") return "red";
+  if (
+    direction === "v1_positive_v2_neutral" ||
+    direction === "v1_negative_v2_neutral" ||
+    direction === "v1_neutral_v2_positive" ||
+    direction === "v1_neutral_v2_negative"
+  ) return "amber";
   return "gray";
+}
+
+function directionLabel(direction: DirectionAgreement): string {
+  const labels: Record<DirectionAgreement, string> = {
+    same_positive: "same positive",
+    same_negative: "same negative",
+    both_neutral: "both neutral",
+    true_opposite: "true opposite",
+    v1_positive_v2_neutral: "v1+ / v2 neutral",
+    v1_negative_v2_neutral: "v1- / v2 neutral",
+    v1_neutral_v2_positive: "v1 neutral / v2+",
+    v1_neutral_v2_negative: "v1 neutral / v2-",
+    unavailable: "unavailable",
+  };
+  return labels[direction];
 }
 
 function magnitudeTone(bucket: MagnitudeBucket): DebugStatusTone {
@@ -179,9 +200,12 @@ export function ScoreComparisonDebugClient() {
             </div>
           </section>
 
-          <section className="grid gap-3 md:grid-cols-4">
+          <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <MetricCard label="Comparable Scores" value={payload.summary.comparableScoreCount} />
-            <MetricCard label="Opposite Direction" value={payload.summary.oppositeDirectionCount} />
+            <MetricCard label="Same Direction" value={payload.summary.sameDirectionCount} />
+            <MetricCard label="Neutral Divergence" value={payload.summary.neutralDivergenceCount} />
+            <MetricCard label="True Opposite" value={payload.summary.trueOppositeDirectionCount} />
+            <MetricCard label="Both Neutral" value={payload.summary.bothNeutralCount} />
             <MetricCard label="Large Difference" value={payload.summary.largeDifferenceCount} />
             <MetricCard label="Avg Abs Difference" value={formatDebugNumber(payload.summary.averageAbsDifference, { signed: false })} />
           </section>
@@ -210,7 +234,7 @@ export function ScoreComparisonDebugClient() {
                       <td className="px-3 py-2">{formatDebugNumber(row.v2Value)}</td>
                       <td className="px-3 py-2 font-semibold">{formatDebugNumber(row.difference)}</td>
                       <td className="px-3 py-2">
-                        <Badge label={row.directionAgreement} tone={directionTone(row.directionAgreement)} />
+                        <Badge label={directionLabel(row.directionAgreement)} tone={directionTone(row.directionAgreement)} />
                       </td>
                       <td className="px-3 py-2">
                         <Badge label={row.magnitudeBucket} tone={magnitudeTone(row.magnitudeBucket)} />
@@ -242,6 +266,96 @@ export function ScoreComparisonDebugClient() {
               </div>
             ) : (
               <p className="mt-3 text-sm text-slate-400">No comparable differences.</p>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-white/10 bg-ink-900/70 p-5">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-white">V2 Missing / Unavailable Diagnostics</h2>
+                <p className="mt-1 text-xs text-slate-500">Factor-level reasons from ShadowScoreResult. Useful for commodity_score and other missing_v2 cases.</p>
+              </div>
+              <Badge label={`global missing ${payload.v2Diagnostics.missingSymbols.length}`} tone={payload.v2Diagnostics.missingSymbols.length > 0 ? "amber" : "green"} />
+            </div>
+
+            {payload.v2Diagnostics.missingSymbols.length > 0 ? (
+              <div className="mt-4 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+                <div className="text-xs font-semibold text-amber-100">Global missing symbols</div>
+                <div className="mt-1 font-mono text-xs leading-5 text-amber-100">{payload.v2Diagnostics.missingSymbols.join(", ")}</div>
+              </div>
+            ) : null}
+
+            {payload.v2Diagnostics.scoresWithNoData.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-400">No missing or non-ok v2 factor diagnostics.</p>
+            ) : (
+              <div className="mt-4 space-y-4">
+                {payload.v2Diagnostics.scoresWithNoData.map((score) => (
+                  <div key={score.scoreKey} className="rounded-lg border border-white/10 bg-ink-950/60 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-white">{score.zhName}</div>
+                        <div className="font-mono text-xs text-slate-500">{score.scoreKey}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge label={`missing ${score.missingSymbols.length}`} tone={score.missingSymbols.length > 0 ? "amber" : "gray"} />
+                        <Badge label={`insufficient ${score.insufficientDataSymbols.length}`} tone={score.insufficientDataSymbols.length > 0 ? "amber" : "gray"} />
+                        <Badge label={`unsupported ${score.unsupportedSymbols.length}`} tone={score.unsupportedSymbols.length > 0 ? "red" : "gray"} />
+                        <Badge label={`context ${score.contextDependentSymbols.length}`} tone={score.contextDependentSymbols.length > 0 ? "gray" : "gray"} />
+                      </div>
+                    </div>
+                    <div className="mt-4 overflow-x-auto rounded-md border border-white/10">
+                      <table className="min-w-[1250px] w-full border-collapse text-left text-xs">
+                        <thead className="bg-white/[0.04] text-slate-400">
+                          <tr>
+                            {[
+                              "Symbol",
+                              "Name",
+                              "Status",
+                              "Obs",
+                              "Latest",
+                              "Transform",
+                              "Lookback",
+                              "Window",
+                              "Min Obs",
+                              "Norm",
+                              "Z",
+                              "Raw",
+                              "Contribution",
+                              "Message",
+                            ].map((column) => (
+                              <th key={column} className="px-3 py-2 font-medium">
+                                {column}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/10">
+                          {score.factors.map((factor) => (
+                            <tr key={`${score.scoreKey}-${factor.symbol}-${factor.status}`} className="text-slate-300">
+                              <td className="px-3 py-2 font-mono text-slate-100">{factor.symbol}</td>
+                              <td className="px-3 py-2">{factor.name}</td>
+                              <td className="px-3 py-2">
+                                <Badge label={factor.status} tone={statusTone(factor.status)} />
+                              </td>
+                              <td className="px-3 py-2">{factor.observationCount}</td>
+                              <td className="px-3 py-2">{factor.latestDate ?? "—"}</td>
+                              <td className="px-3 py-2">{factor.signalTransform ?? "—"}</td>
+                              <td className="px-3 py-2">{factor.transformLookbackDays ?? "—"}</td>
+                              <td className="px-3 py-2">{factor.preferredWindow ?? "—"}</td>
+                              <td className="px-3 py-2">{factor.minObservations ?? "—"}</td>
+                              <td className="px-3 py-2">{formatDebugNumber(factor.normalizedSignal)}</td>
+                              <td className="px-3 py-2">{formatDebugNumber(factor.zScore)}</td>
+                              <td className="px-3 py-2">{formatDebugNumber(factor.rawValue, { signed: false })}</td>
+                              <td className="px-3 py-2">{formatDebugNumber(factor.contribution)}</td>
+                              <td className="max-w-[320px] px-3 py-2 text-slate-500">{factor.message ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </section>
 

@@ -1,6 +1,6 @@
 import { getMacroScoreConfig, macroScoreKeys } from "@/lib/config/macroEngineConfig";
-import type { MacroScoreKey } from "@/lib/config/macroEngineConfig.types";
-import type { ShadowScoreResult } from "@/lib/engines/shadowScoreEngine";
+import type { MacroFactorConfig, MacroScoreKey } from "@/lib/config/macroEngineConfig.types";
+import type { ObservationSeriesMap, ShadowFactorContribution, ShadowScoreResult } from "@/lib/engines/shadowScoreEngine";
 
 export const NEUTRAL_THRESHOLD = 0.25;
 
@@ -8,7 +8,11 @@ export type DirectionAgreement =
   | "same_positive"
   | "same_negative"
   | "both_neutral"
-  | "opposite"
+  | "true_opposite"
+  | "v1_positive_v2_neutral"
+  | "v1_negative_v2_neutral"
+  | "v1_neutral_v2_positive"
+  | "v1_neutral_v2_negative"
   | "unavailable";
 
 export type MagnitudeBucket = "small" | "medium" | "large" | "unavailable";
@@ -56,6 +60,10 @@ export type ScoreComparisonPayload = {
   comparison: Record<MacroScoreKey, ScoreComparisonEntry>;
   summary: {
     comparableScoreCount: number;
+    sameDirectionCount: number;
+    bothNeutralCount: number;
+    trueOppositeDirectionCount: number;
+    neutralDivergenceCount: number;
     oppositeDirectionCount: number;
     largeDifferenceCount: number;
     averageAbsDifference: number | null;
@@ -65,6 +73,33 @@ export type ScoreComparisonPayload = {
       v1Value: number | null;
       v2Value: number | null;
       absDifference: number | null;
+    }>;
+  };
+  v2Diagnostics: {
+    missingSymbols: string[];
+    scoresWithNoData: Array<{
+      scoreKey: MacroScoreKey;
+      zhName: string;
+      missingSymbols: string[];
+      insufficientDataSymbols: string[];
+      unsupportedSymbols: string[];
+      contextDependentSymbols: string[];
+      factors: Array<{
+        symbol: string;
+        name: string;
+        status: ShadowFactorContribution["status"];
+        message?: string;
+        observationCount: number;
+        latestDate: string | null;
+        signalTransform: MacroFactorConfig["signalTransform"] | null;
+        transformLookbackDays: number | null;
+        preferredWindow: number | null;
+        minObservations: number | null;
+        normalizedSignal: number | null;
+        zScore: number | null;
+        rawValue: number | null;
+        contribution: number;
+      }>;
     }>;
   };
   warnings: string[];
@@ -115,7 +150,12 @@ function directionAgreement(v1Value: number | null, v2Value: number | null): Dir
   if (v1 === "neutral" && v2 === "neutral") return "both_neutral";
   if (v1 === "positive" && v2 === "positive") return "same_positive";
   if (v1 === "negative" && v2 === "negative") return "same_negative";
-  return "opposite";
+  if ((v1 === "positive" && v2 === "negative") || (v1 === "negative" && v2 === "positive")) return "true_opposite";
+  if (v1 === "positive" && v2 === "neutral") return "v1_positive_v2_neutral";
+  if (v1 === "negative" && v2 === "neutral") return "v1_negative_v2_neutral";
+  if (v1 === "neutral" && v2 === "positive") return "v1_neutral_v2_positive";
+  if (v1 === "neutral" && v2 === "negative") return "v1_neutral_v2_negative";
+  return "unavailable";
 }
 
 function magnitudeBucket(absDifference: number | null): MagnitudeBucket {
@@ -183,6 +223,81 @@ function aggregateV2Status(scores: Record<MacroScoreKey, ShadowScoreResult>): "o
   return "ok";
 }
 
+function isNeutralDivergence(directionValue: DirectionAgreement): boolean {
+  return [
+    "v1_positive_v2_neutral",
+    "v1_negative_v2_neutral",
+    "v1_neutral_v2_positive",
+    "v1_neutral_v2_negative",
+  ].includes(directionValue);
+}
+
+function latestDateFor(symbol: string, observationsBySymbol?: ObservationSeriesMap): string | null {
+  const points = observationsBySymbol?.[symbol] ?? [];
+  const latest = points
+    .map((point) => new Date(point.date))
+    .filter((date) => Number.isFinite(date.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime())
+    .at(-1);
+  return latest ? latest.toISOString().slice(0, 10) : null;
+}
+
+function factorConfig(scoreKey: MacroScoreKey, symbol: string): MacroFactorConfig | null {
+  return getMacroScoreConfig(scoreKey).factorGroups.flatMap((group) => group.factors).find((factor) => factor.symbol === symbol) ?? null;
+}
+
+function symbolsByStatus(factors: ShadowFactorContribution[], status: ShadowFactorContribution["status"]): string[] {
+  return factors.filter((factor) => factor.status === status).map((factor) => factor.symbol).sort();
+}
+
+function buildV2Diagnostics(params: {
+  v2Scores: Record<MacroScoreKey, ShadowScoreResult>;
+  observationsBySymbol?: ObservationSeriesMap;
+  preferredWindow?: number | null;
+}): ScoreComparisonPayload["v2Diagnostics"] {
+  const scoresWithNoData = macroScoreKeys
+    .map((scoreKey) => {
+      const score = params.v2Scores[scoreKey];
+      const factors = score.groups.flatMap((group) => group.factors);
+      const diagnosticFactors = factors.filter((factor) => factor.status !== "ok");
+      if (score.status !== "no_data" && diagnosticFactors.length === 0) return null;
+
+      return {
+        scoreKey,
+        zhName: score.zhName,
+        missingSymbols: symbolsByStatus(factors, "missing_observations"),
+        insufficientDataSymbols: symbolsByStatus(factors, "insufficient_data"),
+        unsupportedSymbols: symbolsByStatus(factors, "unsupported_transform"),
+        contextDependentSymbols: symbolsByStatus(factors, "context_dependent"),
+        factors: diagnosticFactors.map((factor) => {
+          const config = factorConfig(scoreKey, factor.symbol);
+          return {
+            symbol: factor.symbol,
+            name: factor.name,
+            status: factor.status,
+            message: factor.message,
+            observationCount: params.observationsBySymbol?.[factor.symbol]?.length ?? 0,
+            latestDate: latestDateFor(factor.symbol, params.observationsBySymbol),
+            signalTransform: config?.signalTransform ?? null,
+            transformLookbackDays: config?.transformLookbackDays ?? null,
+            preferredWindow: params.preferredWindow ?? config?.preferredZScoreWindows[0] ?? null,
+            minObservations: config?.minObservations ?? null,
+            normalizedSignal: factor.normalizedSignal,
+            zScore: factor.zScore,
+            rawValue: factor.rawValue,
+            contribution: factor.contribution,
+          };
+        }),
+      };
+    })
+    .filter((score): score is NonNullable<typeof score> => score !== null);
+
+  return {
+    missingSymbols: Array.from(new Set(scoresWithNoData.flatMap((score) => score.missingSymbols))).sort(),
+    scoresWithNoData,
+  };
+}
+
 export function createScoreComparisonPayload(params: {
   v1: {
     status: "ok" | "unavailable" | "partial";
@@ -191,6 +306,7 @@ export function createScoreComparisonPayload(params: {
   };
   v2Scores: Record<MacroScoreKey, ShadowScoreResult>;
   options?: ScoreComparisonOptions;
+  observationsBySymbol?: ObservationSeriesMap;
   warnings?: string[];
   generatedAt?: Date;
 }): ScoreComparisonPayload {
@@ -236,11 +352,20 @@ export function createScoreComparisonPayload(params: {
     comparison,
     summary: {
       comparableScoreCount: comparableEntries.length,
-      oppositeDirectionCount: comparableEntries.filter((entry) => entry.directionAgreement === "opposite").length,
+      sameDirectionCount: comparableEntries.filter((entry) => entry.directionAgreement === "same_positive" || entry.directionAgreement === "same_negative").length,
+      bothNeutralCount: comparableEntries.filter((entry) => entry.directionAgreement === "both_neutral").length,
+      trueOppositeDirectionCount: comparableEntries.filter((entry) => entry.directionAgreement === "true_opposite").length,
+      neutralDivergenceCount: comparableEntries.filter((entry) => isNeutralDivergence(entry.directionAgreement)).length,
+      oppositeDirectionCount: comparableEntries.filter((entry) => entry.directionAgreement === "true_opposite").length,
       largeDifferenceCount: comparableEntries.filter((entry) => entry.magnitudeBucket === "large").length,
       averageAbsDifference,
       largestDifferences,
     },
+    v2Diagnostics: buildV2Diagnostics({
+      v2Scores: params.v2Scores,
+      observationsBySymbol: params.observationsBySymbol,
+      preferredWindow: params.options?.preferredWindow,
+    }),
     warnings: params.warnings ?? [],
   };
 }
