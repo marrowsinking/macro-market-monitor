@@ -1,11 +1,34 @@
 import { describe, expect, test } from "vitest";
-import { getAllMacroScoreConfigs, getMacroScoreConfig, getScorePolarityMultiplier, macroEngineConfig, macroScoreKeys } from "@/lib/config/macroEngineConfig";
+import {
+  getAllConfiguredFactors,
+  getAllFactorsForScore,
+  getAllMacroScoreConfigs,
+  getMacroScoreConfig,
+  getScorePolarityMultiplier,
+  macroEngineConfig,
+  macroScoreKeys,
+} from "@/lib/config/macroEngineConfig";
 import type { MacroScoreKey } from "@/lib/config/macroEngineConfig.types";
 
-function factorPolarity(scoreKey: MacroScoreKey, symbol: string) {
+function findFactor(scoreKey: MacroScoreKey, symbol: string) {
   const factor = getMacroScoreConfig(scoreKey).factorGroups.flatMap((group) => group.factors).find((item) => item.symbol === symbol);
   if (!factor) throw new Error(`Missing factor ${symbol} in ${scoreKey}`);
+  return factor;
+}
+
+function factorPolarity(scoreKey: MacroScoreKey, symbol: string) {
+  const factor = findFactor(scoreKey, symbol);
   return factor.scorePolarity;
+}
+
+function factorTransform(scoreKey: MacroScoreKey, symbol: string) {
+  const factor = findFactor(scoreKey, symbol);
+  return factor.signalTransform;
+}
+
+function firstWindow(scoreKey: MacroScoreKey, symbol: string) {
+  const factor = findFactor(scoreKey, symbol);
+  return factor.preferredZScoreWindows[0];
 }
 
 describe("macroEngineConfig", () => {
@@ -134,5 +157,119 @@ describe("macroEngineConfig", () => {
     expect(getScorePolarityMultiplier("higher_decreases_score")).toBe(-1);
     expect(getScorePolarityMultiplier("context_dependent")).toBe(0);
     expect(getScorePolarityMultiplier("not_scored")).toBe(0);
+  });
+
+  test("all factors define normalization metadata", () => {
+    for (const factor of getAllConfiguredFactors()) {
+      expect(factor.signalTransform).toBeTruthy();
+      expect(factor.minObservations).toBeGreaterThanOrEqual(0);
+      expect(factor.normalizationNote).toBeTruthy();
+    }
+  });
+
+  test("transforms with lookback define transformLookbackDays", () => {
+    for (const factor of getAllConfiguredFactors()) {
+      if (["pct_change", "level_change", "derived_ratio"].includes(factor.signalTransform)) {
+        expect(factor.transformLookbackDays).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("inflation score uses non-level transforms for price indices", () => {
+    for (const symbol of ["CPIAUCSL", "PCEPI", "CPILFESL", "PCEPILFE"]) {
+      expect(factorTransform("inflation_score", symbol)).toBe("yoy_pct");
+    }
+    expect(factorTransform("inflation_score", "DCOILWTICO")).toBe("pct_change");
+    expect(factorTransform("inflation_score", "DGS10")).toBe("level");
+  });
+
+  test("growth score uses momentum and level transforms by series type", () => {
+    expect(factorTransform("growth_score", "PAYEMS")).toBe("mom_change");
+    expect(factorTransform("growth_score", "JTSJOL")).toBe("yoy_pct");
+    expect(factorTransform("growth_score", "UNRATE")).toBe("level");
+    expect(factorTransform("growth_score", "ICSA")).toBe("level");
+  });
+
+  test("risk appetite score uses market-stress and momentum transforms", () => {
+    expect(factorTransform("risk_appetite_score", "^GSPC")).toBe("pct_change");
+    expect(factorTransform("risk_appetite_score", "^NDX")).toBe("pct_change");
+    expect(factorTransform("risk_appetite_score", "VIXCLS")).toBe("level");
+    expect(factorTransform("risk_appetite_score", "BAMLH0A0HYM2")).toBe("level");
+    expect(factorTransform("risk_appetite_score", "DGS10")).toBe("level_change");
+  });
+
+  test("commodity score separates momentum and derived ratio transforms", () => {
+    for (const symbol of ["HG=F", "DCOILWTICO", "GC=F", "SI=F"]) {
+      expect(factorTransform("commodity_score", symbol)).toBe("pct_change");
+    }
+    expect(factorTransform("commodity_score", "GOLD_SILVER_RATIO")).toBe("derived_ratio");
+  });
+
+  test("china placeholder factors are not transformed for scoring", () => {
+    for (const factor of getAllFactorsForScore("china_score")) {
+      expect(factor.signalTransform).toBe("not_scored");
+      expect(factor.minObservations).toBe(0);
+    }
+  });
+
+  test("getAllFactorsForScore returns all inflation factors", () => {
+    expect(getAllFactorsForScore("inflation_score")).toHaveLength(6);
+  });
+
+  test("getAllConfiguredFactors returns factors without de-duplicating repeated symbols", () => {
+    const factors = getAllConfiguredFactors();
+    expect(factors.length).toBeGreaterThan(0);
+    expect(factors.filter((factor) => factor.symbol === "BAMLH0A0HYM2").length).toBeGreaterThan(1);
+  });
+
+  test("monthly macro factors use long rolling windows for sparse observations", () => {
+    const monthlyFactors = getAllConfiguredFactors().filter((factor) => factor.frequency === "monthly_macro" && factor.signalTransform !== "not_scored");
+
+    for (const factor of monthlyFactors) {
+      expect(factor.preferredZScoreWindows[0]).toBeGreaterThanOrEqual(730);
+    }
+  });
+
+  test("monthly macro factors with higher minimum observations start at 730 days or longer", () => {
+    const monthlyFactors = getAllConfiguredFactors().filter(
+      (factor) => factor.frequency === "monthly_macro" && factor.signalTransform !== "not_scored" && factor.minObservations >= 18,
+    );
+
+    for (const factor of monthlyFactors) {
+      expect(factor.preferredZScoreWindows[0]).toBeGreaterThanOrEqual(730);
+    }
+  });
+
+  test("weekly factors with higher minimum observations start at 252 days or longer", () => {
+    const weeklyFactors = getAllConfiguredFactors().filter(
+      (factor) => factor.frequency === "weekly" && factor.signalTransform !== "not_scored" && factor.minObservations >= 20,
+    );
+
+    for (const factor of weeklyFactors) {
+      expect(factor.preferredZScoreWindows[0]).toBeGreaterThanOrEqual(252);
+    }
+  });
+
+  test("non-placeholder scored factors define preferred z-score windows", () => {
+    const scoredFactors = getAllConfiguredFactors().filter((factor) => factor.frequency !== "placeholder" && factor.signalTransform !== "not_scored");
+
+    for (const factor of scoredFactors) {
+      expect(factor.preferredZScoreWindows.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("monthly macro factors use the expected first z-score window", () => {
+    expect(firstWindow("inflation_score", "CPIAUCSL")).toBe(730);
+    expect(firstWindow("inflation_score", "PCEPI")).toBe(730);
+    expect(firstWindow("inflation_score", "CPILFESL")).toBe(730);
+    expect(firstWindow("inflation_score", "PCEPILFE")).toBe(730);
+    expect(firstWindow("growth_score", "PAYEMS")).toBe(730);
+    expect(firstWindow("growth_score", "JTSJOL")).toBe(730);
+    expect(firstWindow("growth_score", "UNRATE")).toBe(730);
+  });
+
+  test("weekly macro factors use the expected first z-score window", () => {
+    expect(firstWindow("liquidity_score", "WALCL")).toBe(252);
+    expect(firstWindow("growth_score", "ICSA")).toBe(252);
   });
 });

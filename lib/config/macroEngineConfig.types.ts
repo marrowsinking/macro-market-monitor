@@ -38,13 +38,23 @@ export type ScorePolarity =
   | "context_dependent"
   | "not_scored";
 
+export type FactorSignalTransform =
+  | "level"
+  | "level_change"
+  | "pct_change"
+  | "yoy_pct"
+  | "mom_change"
+  | "mom_pct"
+  | "derived_ratio"
+  | "not_scored";
+
 export type ImplementationStatus =
   | "current"
   | "partial"
   | "planned"
   | "placeholder";
 
-export type ZScoreWindow = 30 | 60 | 90 | 120 | 252;
+export type ZScoreWindow = 30 | 60 | 90 | 120 | 252 | 365 | 540 | 730 | 1095;
 
 export type MacroFactorConfig = {
   symbol: string;
@@ -56,6 +66,10 @@ export type MacroFactorConfig = {
   scorePolarity: ScorePolarity;
   weight: number;
   preferredZScoreWindows: ZScoreWindow[];
+  signalTransform: FactorSignalTransform;
+  transformLookbackDays?: number;
+  minObservations: number;
+  normalizationNote: string;
   description: string;
   easyModeExplanation: string;
 };

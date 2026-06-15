@@ -1,5 +1,6 @@
 import type {
   FactorFrequency,
+  FactorSignalTransform,
   FactorRole,
   ContributionDirection,
   MacroEngineConfig,
@@ -21,6 +22,10 @@ type FactorInput = {
   scorePolarity: ScorePolarity;
   weight: number;
   preferredZScoreWindows: ZScoreWindow[];
+  signalTransform?: FactorSignalTransform;
+  transformLookbackDays?: number;
+  minObservations?: number;
+  normalizationNote?: string;
   description?: string;
   easyModeExplanation: string;
 };
@@ -66,17 +71,92 @@ export function getScorePolarityMultiplier(scorePolarity: ScorePolarity): 1 | -1
   }
 }
 
-function factor(input: FactorInput): MacroFactorConfig {
-  return {
-    ...input,
-    description: input.description ?? input.easyModeExplanation,
+type NormalizationMetadata = {
+  signalTransform: FactorSignalTransform;
+  transformLookbackDays?: number;
+  minObservations: number;
+  normalizationNote: string;
+};
+
+function metadata(
+  signalTransform: FactorSignalTransform,
+  minObservations: number,
+  normalizationNote: string,
+  transformLookbackDays?: number,
+): NormalizationMetadata {
+  return { signalTransform, minObservations, normalizationNote, transformLookbackDays };
+}
+
+function normalizationMetadata(input: FactorInput, groupKey: string): NormalizationMetadata {
+  if (input.signalTransform && input.minObservations !== undefined && input.normalizationNote) {
+    return {
+      signalTransform: input.signalTransform,
+      transformLookbackDays: input.transformLookbackDays,
+      minObservations: input.minObservations,
+      normalizationNote: input.normalizationNote,
+    };
+  }
+
+  if (input.source === "PLACEHOLDER" || input.frequency === "placeholder" || input.direction === "not_scored") {
+    return metadata("not_scored", 0, "China macro data is not yet connected and is not scored.");
+  }
+
+  if (groupKey === "rate_valuation_pressure" && input.symbol === "DGS10") {
+    return metadata("level_change", 30, "Rate changes over a short window capture valuation pressure better than raw level alone.", 30);
+  }
+
+  if (groupKey === "defensive_precious_metals" && input.symbol === "GOLD_SILVER_RATIO") {
+    return metadata("derived_ratio", 30, "Gold/Silver Ratio is a defensive signal and should not directly push commodity cycle score without context.", 30);
+  }
+
+  const bySymbol: Record<string, NormalizationMetadata> = {
+    WALCL: metadata("level_change", 20, "Fed balance sheet level is slow-moving; changes over a medium window better capture liquidity impulse.", 90),
+    RRPONTSYD: metadata("level", 30, "Reverse repo level reflects idle liquidity parked at the Fed; lower levels are generally more supportive for market liquidity."),
+    SOFR: metadata("level", 30, input.symbol === "SOFR" && groupKey === "rate_support" ? "SOFR level reflects short-term dollar funding cost." : "SOFR level reflects short-term funding cost."),
+    DGS2: metadata("level", 30, input.symbol === "DGS2" && groupKey === "rate_support" ? "2-year Treasury yield level reflects policy-rate support for the dollar." : "2-year Treasury yield level reflects short-end rate pressure."),
+    BAMLH0A0HYM2: metadata("level", 30, groupKey === "high_yield_credit" ? "High yield spread level is the primary proxy for credit conditions." : groupKey === "credit_risk_confirmation" ? "High yield spread level reflects risk appetite through credit stress." : groupKey === "stress_confirmation" ? "Credit stress can confirm broader dollar liquidity pressure." : "High yield spread level acts as a credit and funding stress proxy."),
+    CPIAUCSL: metadata("yoy_pct", 18, "CPI is a price index; YoY change is more meaningful than raw level."),
+    PCEPI: metadata("yoy_pct", 18, "PCE is a price index; YoY change is more meaningful than raw level."),
+    CPILFESL: metadata("yoy_pct", 18, "Core CPI should be evaluated by YoY or annualized change, not raw index level."),
+    PCEPILFE: metadata("yoy_pct", 18, "Core PCE is a Fed-relevant inflation measure; YoY change is more meaningful than raw index level."),
+    DCOILWTICO: groupKey === "growth_led_commodities"
+      ? metadata("pct_change", 30, "Oil 30-day percentage change captures energy commodity momentum.", 30)
+      : metadata("pct_change", 30, "Oil is high-frequency; 30-day percentage change captures energy inflation impulse.", 30),
+    DGS10: metadata("level", 30, "10-year Treasury yield level acts as market confirmation of inflation/rate pressure."),
+    PAYEMS: metadata("mom_change", 18, "Payrolls is a level series; month-over-month change better captures job creation momentum."),
+    JTSJOL: metadata("yoy_pct", 18, "Job openings level is slow-moving; YoY change better captures labor demand trend."),
+    UNRATE: metadata("level", 18, "Unemployment rate level directly reflects labor market slack."),
+    ICSA: metadata("level", 20, "Initial claims level is a timely labor stress indicator."),
+    VIXCLS: metadata("level", 30, "VIX level directly reflects equity volatility and market stress."),
+    "^GSPC": metadata("pct_change", 30, "Equity index level trends over time; 30-day percentage change is a better confirmation signal.", 30),
+    "^NDX": metadata("pct_change", 30, "Nasdaq level trends over time; 30-day percentage change better captures risk appetite momentum.", 30),
+    "DX-Y.NYB": metadata("level", 30, "DXY level reflects broad dollar pressure."),
+    "JPY=X": metadata("level", 30, "USDJPY level reflects yen pressure and dollar strength."),
+    "CNH=X": metadata("level", 30, "USDCNH level reflects offshore yuan pressure and dollar strength."),
+    "HG=F": metadata("pct_change", 30, "Copper 30-day percentage change captures industrial commodity momentum.", 30),
+    "GC=F": metadata("pct_change", 30, "Gold momentum is context-dependent and may reflect defensive demand rather than commodity cycle strength.", 30),
+    "SI=F": metadata("pct_change", 30, "Silver momentum is context-dependent because it contains both industrial and precious-metal characteristics.", 30),
+    GOLD_SILVER_RATIO: metadata("derived_ratio", 30, "Gold/Silver Ratio is a defensive signal and should not directly push commodity cycle score without context.", 30),
   };
+
+  const result = bySymbol[input.symbol];
+  if (!result) {
+    throw new Error(`Missing normalization metadata for factor ${input.symbol} in group ${groupKey}`);
+  }
+  return result;
 }
 
 function group(input: GroupInput): MacroFactorGroupConfig {
   return {
     ...input,
-    factors: input.factors.map(factor),
+    factors: input.factors.map((item) => {
+      const normalized = normalizationMetadata(item, input.key);
+      return {
+        ...item,
+        ...normalized,
+        description: item.description ?? item.easyModeExplanation,
+      };
+    }),
   };
 }
 
@@ -107,7 +187,7 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1.5,
         minContribution: -1.5,
         factors: [
-          { symbol: "WALCL", name: "Fed Balance Sheet", source: "FRED", frequency: "weekly", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [120, 252], easyModeExplanation: "Fed 資產負債表上升通常代表流動性支持增加。" },
+          { symbol: "WALCL", name: "Fed Balance Sheet", source: "FRED", frequency: "weekly", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 1, preferredZScoreWindows: [252, 365], easyModeExplanation: "Fed 資產負債表上升通常代表流動性支持增加。" },
         ],
       },
       {
@@ -167,8 +247,8 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1,
         minContribution: -1,
         factors: [
-          { symbol: "CPIAUCSL", name: "CPI", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [120, 252], easyModeExplanation: "CPI 上升代表整體物價壓力增加。" },
-          { symbol: "PCEPI", name: "PCE", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [120, 252], easyModeExplanation: "PCE 上升代表消費價格壓力增加。" },
+          { symbol: "CPIAUCSL", name: "CPI", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [730, 1095], easyModeExplanation: "CPI 上升代表整體物價壓力增加。" },
+          { symbol: "PCEPI", name: "PCE", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.5, preferredZScoreWindows: [730, 1095], easyModeExplanation: "PCE 上升代表消費價格壓力增加。" },
         ],
       },
       {
@@ -179,8 +259,8 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1.5,
         minContribution: -1.5,
         factors: [
-          { symbol: "CPILFESL", name: "Core CPI", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [120, 252], easyModeExplanation: "Core CPI 上升代表較黏性的物價壓力增加。" },
-          { symbol: "PCEPILFE", name: "Core PCE", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [120, 252], easyModeExplanation: "Core PCE 上升代表核心消費價格壓力增加。" },
+          { symbol: "CPILFESL", name: "Core CPI", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [730, 1095], easyModeExplanation: "Core CPI 上升代表較黏性的物價壓力增加。" },
+          { symbol: "PCEPILFE", name: "Core PCE", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_negative", scorePolarity: "higher_increases_score", weight: 0.75, preferredZScoreWindows: [730, 1095], easyModeExplanation: "Core PCE 上升代表核心消費價格壓力增加。" },
         ],
       },
       {
@@ -228,8 +308,8 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1.5,
         minContribution: -1.5,
         factors: [
-          { symbol: "PAYEMS", name: "Nonfarm Payrolls", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.8, preferredZScoreWindows: [120, 252], easyModeExplanation: "非農就業上升通常代表就業需求仍有支撐。" },
-          { symbol: "JTSJOL", name: "Job Openings", source: "FRED", frequency: "monthly_macro", role: "secondary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.7, preferredZScoreWindows: [120, 252], easyModeExplanation: "職位空缺上升通常代表企業招聘需求較強。" },
+          { symbol: "PAYEMS", name: "Nonfarm Payrolls", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.8, preferredZScoreWindows: [730, 1095], easyModeExplanation: "非農就業上升通常代表就業需求仍有支撐。" },
+          { symbol: "JTSJOL", name: "Job Openings", source: "FRED", frequency: "monthly_macro", role: "secondary", direction: "higher_is_positive", scorePolarity: "higher_increases_score", weight: 0.7, preferredZScoreWindows: [730, 1095], easyModeExplanation: "職位空缺上升通常代表企業招聘需求較強。" },
         ],
       },
       {
@@ -240,8 +320,8 @@ const scores: Record<MacroScoreKey, MacroScoreConfig> = {
         maxContribution: 1.5,
         minContribution: -1.5,
         factors: [
-          { symbol: "UNRATE", name: "Unemployment Rate", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "lower_is_positive", scorePolarity: "higher_decreases_score", weight: 0.8, preferredZScoreWindows: [120, 252], easyModeExplanation: "失業率下降通常代表勞動市場更穩。" },
-          { symbol: "ICSA", name: "Initial Claims", source: "FRED", frequency: "weekly", role: "primary", direction: "lower_is_positive", scorePolarity: "higher_decreases_score", weight: 0.8, preferredZScoreWindows: [60, 120], easyModeExplanation: "初請失業金下降通常代表就業壓力緩和。" },
+          { symbol: "UNRATE", name: "Unemployment Rate", source: "FRED", frequency: "monthly_macro", role: "primary", direction: "lower_is_positive", scorePolarity: "higher_decreases_score", weight: 0.8, preferredZScoreWindows: [730, 1095], easyModeExplanation: "失業率下降通常代表勞動市場更穩。" },
+          { symbol: "ICSA", name: "Initial Claims", source: "FRED", frequency: "weekly", role: "primary", direction: "lower_is_positive", scorePolarity: "higher_decreases_score", weight: 0.8, preferredZScoreWindows: [252, 365], easyModeExplanation: "初請失業金下降通常代表就業壓力緩和。" },
         ],
       },
     ],
@@ -487,4 +567,12 @@ export function getMacroScoreConfig(key: MacroScoreKey): MacroScoreConfig {
 
 export function getAllMacroScoreConfigs(): MacroScoreConfig[] {
   return macroScoreKeys.map(getMacroScoreConfig);
+}
+
+export function getAllFactorsForScore(scoreKey: MacroScoreKey): MacroFactorConfig[] {
+  return getMacroScoreConfig(scoreKey).factorGroups.flatMap((group) => group.factors);
+}
+
+export function getAllConfiguredFactors(): MacroFactorConfig[] {
+  return getAllMacroScoreConfigs().flatMap((scoreConfig) => scoreConfig.factorGroups.flatMap((group) => group.factors));
 }
