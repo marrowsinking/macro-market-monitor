@@ -25,6 +25,10 @@ function statusClass(status: NfciBenchmarkPoint["status"]): string {
 function alignmentClass(alignment: NfciAlignment): string {
   if (alignment === "aligned") return "border-emerald-500/20 bg-emerald-500/10 text-emerald-300";
   if (alignment === "divergent") return "border-rose-500/20 bg-rose-500/10 text-rose-300";
+  if (alignment === "mixed") return "border-amber-500/20 bg-amber-500/10 text-amber-300";
+  if (alignment === "score_neutral" || alignment === "benchmark_neutral" || alignment === "both_neutral") {
+    return "border-sky-500/20 bg-sky-500/10 text-sky-300";
+  }
   return "border-white/10 bg-white/5 text-slate-400";
 }
 
@@ -148,6 +152,9 @@ export function NfciBenchmarkDebugClient() {
           <section className="rounded-xl border border-white/10 bg-ink-900/70 p-5">
             <h2 className="text-base font-semibold text-white">Alignment</h2>
             <p className="mt-1 text-xs text-slate-500">NFCI direction is inverted: positive NFCI means tighter conditions.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Neutral means the score or benchmark is close to zero and does not provide a strong directional signal. Unavailable means required data is missing or cannot be calculated.
+            </p>
             <div className="mt-4 overflow-x-auto rounded-lg border border-white/10">
               <table className="min-w-[760px] w-full border-collapse text-left text-xs">
                 <thead className="bg-white/[0.04] text-slate-400">

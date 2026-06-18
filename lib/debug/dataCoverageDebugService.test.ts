@@ -140,6 +140,43 @@ describe("dataCoverageDebugService", () => {
     expect(summary.highImpactIssues).toEqual([]);
   });
 
+  test("summary exposes frequency-aware freshness buckets", () => {
+    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["DX-Y.NYB", "CPIAUCSL", "PCEPI"].includes(item.symbol));
+    const rows = buildCoverageRows({
+      configuredSymbols,
+      dbStats: [
+        { symbol: "DX-Y.NYB", observationCount: 100, firstDate: "2025-01-01", latestDate: "2026-06-14" },
+        { symbol: "CPIAUCSL", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-04-28" },
+        { symbol: "PCEPI", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-03-29" },
+      ],
+      now: new Date("2026-06-15T00:00:00Z"),
+    });
+    const summary = buildCoverageSummary(rows);
+
+    expect(summary.freshCount).toBe(1);
+    expect(summary.carriedForwardCount).toBe(1);
+    expect(summary.decayingCount).toBe(1);
+  });
+
+  test("high impact issues exclude carried forward and decaying rows", () => {
+    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["CPIAUCSL", "PCEPI", "VIXCLS"].includes(item.symbol));
+    const rows = buildCoverageRows({
+      configuredSymbols,
+      dbStats: [
+        { symbol: "CPIAUCSL", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-04-28" },
+        { symbol: "PCEPI", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-03-29" },
+      ],
+      now: new Date("2026-06-15T00:00:00Z"),
+    });
+    const summary = buildCoverageSummary(rows);
+
+    expect(summary.carriedForwardCount).toBe(1);
+    expect(summary.decayingCount).toBe(1);
+    expect(summary.highImpactIssues).toEqual([
+      expect.objectContaining({ symbol: "VIXCLS", status: "missing" }),
+    ]);
+  });
+
   test("createDataCoverageDebugPayload adds warnings for missing insufficient decaying stale and CNY=X", () => {
     const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["VIXCLS", "CNY=X", "DX-Y.NYB", "PCEPI"].includes(item.symbol));
     const payload = createDataCoverageDebugPayload({

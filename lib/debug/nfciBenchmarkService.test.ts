@@ -66,7 +66,35 @@ describe("nfciBenchmarkService", () => {
   });
 
   test("neutral cases do not trigger false divergence", () => {
-    expect(compareScoreWithInvertedBenchmark(0.1, -1)).toBe("unavailable");
-    expect(compareScoreWithInvertedBenchmark(1, 0.1)).toBe("unavailable");
+    expect(compareScoreWithInvertedBenchmark(0.1, -1)).toBe("score_neutral");
+    expect(compareScoreWithInvertedBenchmark(1, 0.1)).toBe("benchmark_neutral");
+  });
+
+  test("missing benchmark is unavailable", () => {
+    expect(compareScoreWithInvertedBenchmark(1, null)).toBe("unavailable");
+  });
+
+  test("missing shadow score is unavailable", () => {
+    expect(compareScoreWithInvertedBenchmark(null, -1)).toBe("unavailable");
+  });
+
+  test("score neutral is separate from unavailable", () => {
+    expect(compareScoreWithInvertedBenchmark(0, -0.51)).toBe("score_neutral");
+  });
+
+  test("benchmark neutral is separate from unavailable", () => {
+    expect(compareScoreWithInvertedBenchmark(0.68, -0.04)).toBe("benchmark_neutral");
+  });
+
+  test("aligned uses inverted benchmark direction", () => {
+    expect(compareScoreWithInvertedBenchmark(0.86, -0.59)).toBe("aligned");
+  });
+
+  test("divergent uses inverted benchmark direction", () => {
+    expect(compareScoreWithInvertedBenchmark(0.86, 0.59)).toBe("divergent");
+  });
+
+  test("both neutral is separate from unavailable", () => {
+    expect(compareScoreWithInvertedBenchmark(0.05, -0.05)).toBe("both_neutral");
   });
 });

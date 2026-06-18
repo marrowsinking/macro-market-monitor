@@ -1,7 +1,14 @@
 export const NFCI_BENCHMARK_SYMBOLS = ["NFCI", "ANFCI", "NFCIRISK", "NFCICREDIT", "NFCILEVERAGE"] as const;
 
 export type NfciBenchmarkSymbol = (typeof NFCI_BENCHMARK_SYMBOLS)[number];
-export type NfciAlignment = "aligned" | "divergent" | "unavailable";
+export type NfciAlignment =
+  | "aligned"
+  | "divergent"
+  | "score_neutral"
+  | "benchmark_neutral"
+  | "both_neutral"
+  | "mixed"
+  | "unavailable";
 
 export type NfciObservationPoint = {
   date: Date | string;
@@ -111,9 +118,19 @@ function signBucket(value: number | null | undefined): "positive" | "negative" |
 
 export function compareScoreWithInvertedBenchmark(scoreValue: number | null | undefined, benchmarkValue: number | null | undefined): NfciAlignment {
   const score = signBucket(scoreValue);
-  const benchmark = signBucket(benchmarkValue);
-  if (score === "unavailable" || benchmark === "unavailable" || score === "neutral" || benchmark === "neutral") return "unavailable";
-  return score !== benchmark ? "aligned" : "divergent";
+  const invertedBenchmark = signBucket(
+    benchmarkValue === null || benchmarkValue === undefined || !Number.isFinite(benchmarkValue)
+      ? benchmarkValue
+      : -benchmarkValue,
+  );
+
+  if (score === "unavailable" || invertedBenchmark === "unavailable") return "unavailable";
+  if (score === "neutral" && invertedBenchmark === "neutral") return "both_neutral";
+  if (score === "neutral") return "score_neutral";
+  if (invertedBenchmark === "neutral") return "benchmark_neutral";
+  if (score === invertedBenchmark) return "aligned";
+  if (score !== invertedBenchmark) return "divergent";
+  return "mixed";
 }
 
 export function createNfciBenchmarkPayload(input: {
@@ -137,6 +154,8 @@ export function createNfciBenchmarkPayload(input: {
     "NFCI positive means financial conditions are tighter than average.",
     "Liquidity, credit, and risk appetite scores are interpreted in the opposite direction: positive score means easier or healthier conditions.",
     "Use liquidity_score vs -NFCI, credit_score vs -NFCICREDIT, and risk_appetite_score vs -NFCIRISK.",
+    "Neutral means the score or benchmark is close to zero and does not provide a strong directional signal.",
+    "Unavailable means required data is missing or cannot be calculated.",
   ];
 
   if (Object.values(benchmark).some((item) => item.status === "unavailable")) {
