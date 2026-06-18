@@ -1,6 +1,7 @@
 import { macroScoreKeys } from "@/lib/config/macroEngineConfig";
 import type { MacroScoreKey } from "@/lib/config/macroEngineConfig.types";
 import type { CoverageRow, DataCoverageDebugPayload } from "@/lib/debug/dataCoverageDebugService";
+import type { HistoricalReplayResult, HistoricalReplayScoreSummary } from "@/lib/debug/historicalReplayService";
 import type { NfciAlignment, NfciBenchmarkPayload } from "@/lib/debug/nfciBenchmarkService";
 import type { DirectionAgreement, ScoreComparisonPayload } from "@/lib/debug/scoreComparisonDebugService";
 import type { ShadowFactorContribution, ShadowScoreResult } from "@/lib/engines/shadowScoreEngine";
@@ -22,6 +23,15 @@ export type ScorePromotionAuditResult = {
     needsDefinitionAudit: number;
     needsDataImprovement: number;
     notReady: number;
+    historicalSummary?: {
+      included: boolean;
+      days: number;
+      step: number;
+      stableCount: number;
+      watchCount: number;
+      unstableCount: number;
+      unavailableCount: number;
+    };
   };
   scores: ScorePromotionAuditRow[];
   globalNotes: string[];
@@ -58,6 +68,18 @@ export type ScorePromotionAuditRow = {
     unavailableFactorCount: number;
     notes: string[];
   };
+  historical: {
+    days: number;
+    step: number;
+    stability: "stable" | "watch" | "unstable" | "unavailable";
+    availableCount: number;
+    missingCount: number;
+    signFlipCount: number;
+    largeMoveCount: number;
+    saturationCount: number;
+    latest: number | null;
+    notes: string[];
+  } | null;
   reasons: string[];
   blockers: string[];
   recommendedNextAction: string;
@@ -67,6 +89,8 @@ type AuditInput = {
   comparison?: ScoreComparisonPayload | null;
   dataCoverage?: DataCoverageDebugPayload | null;
   nfciBenchmark?: NfciBenchmarkPayload | null;
+  historicalReplay?: HistoricalReplayResult | null;
+  includeHistorical?: boolean;
   inputNotes?: string[];
   generatedAt?: Date;
 };
@@ -191,6 +215,88 @@ function recommendedAction(decision: PromotionDecision, scoreKey: MacroScoreKey)
   return "Keep as v2 candidate and monitor the next data refresh cycles.";
 }
 
+function historicalByScore(scoreKey: MacroScoreKey, replay: HistoricalReplayResult | null | undefined): HistoricalReplayScoreSummary | null {
+  return replay?.summary.scoreSummaries.find((summary) => summary.scoreKey === scoreKey) ?? null;
+}
+
+function historicalEvidence(params: {
+  scoreKey: MacroScoreKey;
+  replay: HistoricalReplayResult | null | undefined;
+}): ScorePromotionAuditRow["historical"] {
+  const summary = historicalByScore(params.scoreKey, params.replay);
+  if (!summary || !params.replay) return null;
+
+  return {
+    days: params.replay.params.days,
+    step: params.replay.params.step,
+    stability: summary.stability,
+    availableCount: summary.availableCount,
+    missingCount: summary.missingCount,
+    signFlipCount: summary.signFlipCount,
+    largeMoveCount: summary.largeMoveCount,
+    saturationCount: summary.saturationCount,
+    latest: summary.latest,
+    notes: summary.notes,
+  };
+}
+
+function hasCurrentDivergence(direction: DirectionAgreement | null): boolean {
+  return direction === "true_opposite" || isNeutralDivergence(direction);
+}
+
+function applyHistoricalEvidence(row: Omit<ScorePromotionAuditRow, "historical">, historical: ScorePromotionAuditRow["historical"]): ScorePromotionAuditRow {
+  if (!historical) return { ...row, historical: null };
+
+  let decision = row.decision;
+  const reasons = [...row.reasons];
+  const blockers = [...row.blockers];
+
+  if (historical.stability === "unavailable") {
+    if (row.scoreKey === "china_score") {
+      decision = "not_ready";
+    } else {
+      reasons.push("Historical replay is unavailable for this score; current audit decision is retained.");
+    }
+  }
+
+  if (historical.stability === "unstable") {
+    reasons.push("Historical replay shows unstable score behavior over the selected period.");
+    if (row.scoreKey === "liquidity_score" || row.scoreKey === "commodity_score") {
+      decision = "needs_definition_audit";
+      blockers.push("Historical replay instability requires definition audit before promotion.");
+    } else if (row.scoreKey === "china_score") {
+      decision = "not_ready";
+    } else if (decision === "ready") {
+      decision = "ready_with_monitoring";
+    } else if (decision === "ready_with_monitoring" && hasCurrentDivergence(row.directionAgreement)) {
+      decision = "needs_definition_audit";
+      blockers.push("Historical instability combines with current divergence.");
+    }
+  }
+
+  if (historical.stability === "watch") {
+    reasons.push("Historical replay is watch-level; promotion should require continued monitoring.");
+    if (decision === "ready" && (row.dataHealth.status !== "healthy" || hasCurrentDivergence(row.directionAgreement))) {
+      decision = "ready_with_monitoring";
+    } else if (decision === "ready" && row.scoreKey !== "dollar_score") {
+      decision = "ready_with_monitoring";
+    }
+  }
+
+  if (historical.stability === "stable") {
+    reasons.push("Historical replay is stable over the selected period.");
+  }
+
+  return {
+    ...row,
+    decision,
+    historical,
+    reasons,
+    blockers,
+    recommendedNextAction: recommendedAction(decision, row.scoreKey),
+  };
+}
+
 function decideScore(params: {
   scoreKey: MacroScoreKey;
   comparisonEntry?: ScoreComparisonPayload["comparison"][MacroScoreKey];
@@ -300,9 +406,11 @@ function decideScore(params: {
 
 export function createScorePromotionAuditPayload(params: AuditInput): ScorePromotionAuditResult {
   const globalNotes = [...(params.inputNotes ?? [])];
+  const includeHistorical = params.includeHistorical ?? Boolean(params.historicalReplay);
   if (!params.comparison) globalNotes.push("Score comparison input unavailable; generated partial audit.");
   if (!params.dataCoverage) globalNotes.push("Data coverage input unavailable; data health marked from available inputs only.");
   if (!params.nfciBenchmark) globalNotes.push("NFCI benchmark input unavailable; benchmark evidence omitted.");
+  if (includeHistorical && !params.historicalReplay) globalNotes.push("Historical replay input unavailable; historical evidence omitted.");
 
   const scores = macroScoreKeys.map((scoreKey): ScorePromotionAuditRow => {
     const comparisonEntry = params.comparison?.comparison[scoreKey];
@@ -319,7 +427,7 @@ export function createScorePromotionAuditPayload(params: AuditInput): ScorePromo
       benchmark,
     });
 
-    return {
+    const baseRow = {
       scoreKey,
       label: scoreLabels[scoreKey],
       decision: decision.decision,
@@ -335,7 +443,34 @@ export function createScorePromotionAuditPayload(params: AuditInput): ScorePromo
       blockers: decision.blockers,
       recommendedNextAction: decision.recommendedNextAction,
     };
+
+    return applyHistoricalEvidence(
+      baseRow,
+      includeHistorical ? historicalEvidence({ scoreKey, replay: params.historicalReplay }) : null,
+    );
   });
+  const historicalSummary =
+    includeHistorical && params.historicalReplay
+      ? {
+          included: true,
+          days: params.historicalReplay.params.days,
+          step: params.historicalReplay.params.step,
+          stableCount: params.historicalReplay.summary.stableScores,
+          watchCount: params.historicalReplay.summary.watchScores,
+          unstableCount: params.historicalReplay.summary.unstableScores,
+          unavailableCount: params.historicalReplay.summary.unavailableScores,
+        }
+      : includeHistorical === false
+        ? {
+            included: false,
+            days: params.historicalReplay?.params.days ?? 0,
+            step: params.historicalReplay?.params.step ?? 0,
+            stableCount: 0,
+            watchCount: 0,
+            unstableCount: 0,
+            unavailableCount: 0,
+          }
+        : undefined;
 
   return {
     generatedAt: (params.generatedAt ?? new Date()).toISOString(),
@@ -347,6 +482,7 @@ export function createScorePromotionAuditPayload(params: AuditInput): ScorePromo
       needsDefinitionAudit: scores.filter((row) => row.decision === "needs_definition_audit").length,
       needsDataImprovement: scores.filter((row) => row.decision === "needs_data_improvement").length,
       notReady: scores.filter((row) => row.decision === "not_ready").length,
+      ...(historicalSummary ? { historicalSummary } : {}),
     },
     scores,
     globalNotes,

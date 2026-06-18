@@ -11,6 +11,10 @@ import {
   type NfciObservationPoint,
 } from "@/lib/debug/nfciBenchmarkService";
 import {
+  buildHistoricalReplayResult,
+  clampReplayParams,
+} from "@/lib/debug/historicalReplayService";
+import {
   createScoreComparisonPayload,
   currentScoresFromMacroRegime,
 } from "@/lib/debug/scoreComparisonDebugService";
@@ -23,6 +27,17 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function parseNumber(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseIncludeHistorical(value: string | null): boolean {
+  if (value === null) return true;
+  return value !== "false";
+}
 
 async function loadScoreComparison() {
   const requestedSymbols = collectRequiredShadowSymbols();
@@ -150,12 +165,45 @@ async function loadNfciBenchmark() {
   });
 }
 
-export async function GET() {
+async function loadHistoricalReplay(params: { days: number; step: number }) {
+  const requestedSymbols = collectRequiredShadowSymbols();
+  const indicators = await prisma.indicator.findMany({
+    where: { symbol: { in: requestedSymbols } },
+    include: {
+      observations: {
+        orderBy: { date: "asc" },
+      },
+    },
+    orderBy: { symbol: "asc" },
+  });
+  const rows = indicators.flatMap((indicator) =>
+    indicator.observations.map((observation) => ({
+      symbol: indicator.symbol,
+      date: observation.date,
+      value: observation.value,
+    })),
+  );
+  const observationsBySymbol = buildObservationSeriesMap(rows);
+
+  return buildHistoricalReplayResult({
+    observationsBySymbol,
+    params,
+  });
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const includeHistorical = parseIncludeHistorical(url.searchParams.get("includeHistorical"));
+  const historicalParams = clampReplayParams({
+    days: parseNumber(url.searchParams.get("historicalDays")),
+    step: parseNumber(url.searchParams.get("historicalStep")),
+  });
   const globalNotes: string[] = [];
-  const [comparisonResult, dataCoverageResult, nfciResult] = await Promise.allSettled([
+  const [comparisonResult, dataCoverageResult, nfciResult, historicalResult] = await Promise.allSettled([
     loadScoreComparison(),
     loadDataCoverage(),
     loadNfciBenchmark(),
+    includeHistorical ? loadHistoricalReplay(historicalParams) : Promise.resolve(null),
   ]);
 
   if (comparisonResult.status === "rejected") {
@@ -167,12 +215,17 @@ export async function GET() {
   if (nfciResult.status === "rejected") {
     globalNotes.push(`NFCI benchmark unavailable: ${nfciResult.reason instanceof Error ? nfciResult.reason.message : "Unknown error"}`);
   }
+  if (historicalResult.status === "rejected") {
+    globalNotes.push(`Historical replay unavailable: ${historicalResult.reason instanceof Error ? historicalResult.reason.message : "Unknown error"}`);
+  }
 
   return NextResponse.json(
     createScorePromotionAuditPayload({
       comparison: comparisonResult.status === "fulfilled" ? comparisonResult.value : null,
       dataCoverage: dataCoverageResult.status === "fulfilled" ? dataCoverageResult.value : null,
       nfciBenchmark: nfciResult.status === "fulfilled" ? nfciResult.value : null,
+      historicalReplay: historicalResult.status === "fulfilled" ? historicalResult.value : null,
+      includeHistorical,
       inputNotes: globalNotes,
     }),
   );

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { macroScoreKeys } from "@/lib/config/macroEngineConfig";
 import type { MacroScoreKey } from "@/lib/config/macroEngineConfig.types";
 import type { DataCoverageDebugPayload } from "@/lib/debug/dataCoverageDebugService";
+import type { HistoricalReplayResult, HistoricalReplayStability } from "@/lib/debug/historicalReplayService";
 import type { NfciBenchmarkPayload } from "@/lib/debug/nfciBenchmarkService";
 import type { DirectionAgreement, ScoreComparisonPayload } from "@/lib/debug/scoreComparisonDebugService";
 import { createScorePromotionAuditPayload } from "@/lib/debug/scorePromotionAuditService";
@@ -197,6 +198,54 @@ function nfciPayload(alignment: Partial<NfciBenchmarkPayload["alignment"]> = {})
   };
 }
 
+function historicalReplayPayload(
+  overrides: Partial<Record<MacroScoreKey, HistoricalReplayStability>> = {},
+): HistoricalReplayResult {
+  const scoreSummaries = macroScoreKeys.map((scoreKey) => {
+    const stability = overrides[scoreKey] ?? "stable";
+    const availableCount = stability === "unavailable" ? 0 : 90;
+    return {
+      scoreKey,
+      label: scoreLabels[scoreKey],
+      availableCount,
+      missingCount: 90 - availableCount,
+      average: stability === "unavailable" ? null : 0.5,
+      min: stability === "unavailable" ? null : -0.5,
+      max: stability === "unavailable" ? null : 1,
+      latest: stability === "unavailable" ? null : 0.5,
+      signFlipCount: stability === "unstable" ? 9 : stability === "watch" ? 3 : 0,
+      largeMoveCount: stability === "unstable" ? 13 : stability === "watch" ? 6 : 0,
+      saturationCount: stability === "unstable" ? 4 : 0,
+      stability,
+      notes: stability === "stable" ? ["Stable historical replay."] : [`Historical replay is ${stability}.`],
+    };
+  });
+
+  return {
+    generatedAt: "2026-06-18T00:00:00.000Z",
+    engineVersion: "historical-replay-debug",
+    params: {
+      days: 90,
+      step: 1,
+      startDate: "2026-03-21",
+      endDate: "2026-06-18",
+    },
+    summary: {
+      replayDates: 90,
+      successfulDates: 90,
+      partialDates: 0,
+      failedDates: 0,
+      stableScores: scoreSummaries.filter((item) => item.stability === "stable").length,
+      watchScores: scoreSummaries.filter((item) => item.stability === "watch").length,
+      unstableScores: scoreSummaries.filter((item) => item.stability === "unstable").length,
+      unavailableScores: scoreSummaries.filter((item) => item.stability === "unavailable").length,
+      scoreSummaries,
+    },
+    rows: [],
+    globalNotes: [],
+  };
+}
+
 function row(scoreKey: MacroScoreKey, params?: Parameters<typeof createScorePromotionAuditPayload>[0]) {
   const payload = createScorePromotionAuditPayload({
     comparison: comparisonPayload(),
@@ -305,5 +354,145 @@ describe("scorePromotionAuditService", () => {
     const counted = payload.scores.filter((item) => item.decision === "needs_data_improvement").length;
     expect(payload.summary.needsDataImprovement).toBe(counted);
     expect(payload.summary.total).toBe(8);
+  });
+});
+
+describe("scorePromotionAuditService historical integration", () => {
+  test("includeHistorical false returns audit without historical fields", () => {
+    const payload = createScorePromotionAuditPayload({
+      comparison: comparisonPayload(),
+      dataCoverage: coveragePayload([]),
+      nfciBenchmark: nfciPayload(),
+      historicalReplay: historicalReplayPayload(),
+      includeHistorical: false,
+      generatedAt: new Date("2026-06-18T00:00:00Z"),
+    });
+
+    expect(payload.summary.historicalSummary?.included).toBe(false);
+    expect(payload.scores.every((item) => item.historical === null)).toBe(true);
+  });
+
+  test("includeHistorical true adds historical summary", () => {
+    const payload = createScorePromotionAuditPayload({
+      comparison: comparisonPayload(),
+      dataCoverage: coveragePayload([]),
+      nfciBenchmark: nfciPayload(),
+      historicalReplay: historicalReplayPayload({
+        risk_appetite_score: "watch",
+        liquidity_score: "unstable",
+        china_score: "unavailable",
+      }),
+      includeHistorical: true,
+      generatedAt: new Date("2026-06-18T00:00:00Z"),
+    });
+
+    expect(payload.summary.historicalSummary).toMatchObject({
+      included: true,
+      days: 90,
+      step: 1,
+      stableCount: 5,
+      watchCount: 1,
+      unstableCount: 1,
+      unavailableCount: 1,
+    });
+  });
+
+  test("stable historical evidence is attached to ready scores", () => {
+    const result = row("dollar_score", {
+      historicalReplay: historicalReplayPayload({ dollar_score: "stable" }),
+      includeHistorical: true,
+    });
+
+    expect(result.historical?.stability).toBe("stable");
+    expect(result.decision).toBe("ready");
+    expect(result.reasons).toContain("Historical replay is stable over the selected period.");
+  });
+
+  test("unstable liquidity remains needs definition audit", () => {
+    const result = row("liquidity_score", {
+      historicalReplay: historicalReplayPayload({ liquidity_score: "unstable" }),
+      includeHistorical: true,
+    });
+
+    expect(result.historical?.stability).toBe("unstable");
+    expect(result.decision).toBe("needs_definition_audit");
+  });
+
+  test("unstable commodity remains needs definition audit", () => {
+    const result = row("commodity_score", {
+      historicalReplay: historicalReplayPayload({ commodity_score: "unstable" }),
+      includeHistorical: true,
+    });
+
+    expect(result.historical?.stability).toBe("unstable");
+    expect(result.decision).toBe("needs_definition_audit");
+  });
+
+  test("unavailable china remains not ready", () => {
+    const result = row("china_score", {
+      historicalReplay: historicalReplayPayload({ china_score: "unavailable" }),
+      includeHistorical: true,
+    });
+
+    expect(result.historical?.stability).toBe("unavailable");
+    expect(result.decision).toBe("not_ready");
+  });
+
+  test("watch risk appetite remains ready with monitoring", () => {
+    const result = row("risk_appetite_score", {
+      historicalReplay: historicalReplayPayload({ risk_appetite_score: "watch" }),
+      includeHistorical: true,
+    });
+
+    expect(result.historical?.stability).toBe("watch");
+    expect(result.decision).toBe("ready_with_monitoring");
+  });
+
+  test("ready score with unstable historical is downgraded to ready with monitoring", () => {
+    const result = row("dollar_score", {
+      historicalReplay: historicalReplayPayload({ dollar_score: "unstable" }),
+      includeHistorical: true,
+    });
+
+    expect(result.historical?.stability).toBe("unstable");
+    expect(result.decision).toBe("ready_with_monitoring");
+  });
+
+  test("historical replay failure returns partial audit with global notes", () => {
+    const payload = createScorePromotionAuditPayload({
+      comparison: comparisonPayload(),
+      dataCoverage: coveragePayload([]),
+      nfciBenchmark: nfciPayload(),
+      historicalReplay: null,
+      includeHistorical: true,
+      inputNotes: ["Historical replay unavailable: timeout"],
+      generatedAt: new Date("2026-06-18T00:00:00Z"),
+    });
+
+    expect(payload.scores).toHaveLength(8);
+    expect(payload.globalNotes).toContain("Historical replay unavailable: timeout");
+  });
+
+  test("summary counts include historical stable watch unstable unavailable counts", () => {
+    const payload = createScorePromotionAuditPayload({
+      comparison: comparisonPayload(),
+      dataCoverage: coveragePayload([]),
+      nfciBenchmark: nfciPayload(),
+      historicalReplay: historicalReplayPayload({
+        risk_appetite_score: "watch",
+        liquidity_score: "unstable",
+        commodity_score: "unstable",
+        china_score: "unavailable",
+      }),
+      includeHistorical: true,
+      generatedAt: new Date("2026-06-18T00:00:00Z"),
+    });
+
+    expect(payload.summary.historicalSummary).toMatchObject({
+      stableCount: 4,
+      watchCount: 1,
+      unstableCount: 2,
+      unavailableCount: 1,
+    });
   });
 });

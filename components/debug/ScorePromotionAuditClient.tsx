@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import type {
   PromotionDecision,
@@ -51,6 +51,13 @@ function benchmarkTone(alignment: string): Tone {
   if (alignment === "aligned") return "green";
   if (alignment === "divergent") return "red";
   if (alignment === "mixed") return "amber";
+  return "gray";
+}
+
+function historicalTone(stability: string): Tone {
+  if (stability === "stable") return "green";
+  if (stability === "watch") return "amber";
+  if (stability === "unstable") return "red";
   return "gray";
 }
 
@@ -125,6 +132,27 @@ function ScoreDetails({ row }: { row: ScorePromotionAuditRow }) {
         </div>
       ) : null}
       <div className="lg:col-span-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Historical</h3>
+        {row.historical ? (
+          <div className="mt-2 space-y-2 text-sm text-slate-300">
+            <div className="flex flex-wrap gap-2">
+              <Badge label={row.historical.stability} tone={historicalTone(row.historical.stability)} />
+              <Badge label={`${row.historical.days}d / step ${row.historical.step}`} tone="gray" />
+              <span>Available {row.historical.availableCount} / Missing {row.historical.missingCount}</span>
+              <span>Latest {formatDebugNumber(row.historical.latest)}</span>
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+              <span>Sign flips: {row.historical.signFlipCount}</span>
+              <span>Large moves: {row.historical.largeMoveCount}</span>
+              <span>Saturation: {row.historical.saturationCount}</span>
+            </div>
+            <BulletList items={row.historical.notes} empty="No historical notes." />
+          </div>
+        ) : (
+          <p className="mt-2 text-sm text-slate-500">Historical replay not included.</p>
+        )}
+      </div>
+      <div className="lg:col-span-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recommended Next Action</h3>
         <p className="mt-2 text-sm text-slate-300">{row.recommendedNextAction}</p>
       </div>
@@ -138,12 +166,23 @@ export function ScorePromotionAuditClient() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<string[]>([]);
+  const [includeHistorical, setIncludeHistorical] = useState(true);
+  const [historicalDays, setHistoricalDays] = useState("90");
+  const [historicalStep, setHistoricalStep] = useState("1");
+
+  const query = useMemo(() => {
+    const search = new URLSearchParams();
+    search.set("includeHistorical", includeHistorical ? "true" : "false");
+    search.set("historicalDays", historicalDays);
+    search.set("historicalStep", historicalStep);
+    return search.toString();
+  }, [includeHistorical, historicalDays, historicalStep]);
 
   const loadAudit = useCallback(async () => {
     setError(null);
     setRefreshing(true);
     try {
-      const response = await fetch("/api/debug/score-promotion-audit", { cache: "no-store" });
+      const response = await fetch(`/api/debug/score-promotion-audit?${query}`, { cache: "no-store" });
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         const message = isRecord(body) && typeof body.message === "string" ? body.message : "Failed to load score promotion audit";
@@ -159,7 +198,7 @@ export function ScorePromotionAuditClient() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [query]);
 
   useEffect(() => {
     void loadAudit();
@@ -195,6 +234,43 @@ export function ScorePromotionAuditClient() {
             generatedAt: {payload.generatedAt} · engineVersion: {payload.engineVersion}
           </p>
         ) : null}
+        <div className="mt-5 grid gap-3 md:grid-cols-4">
+          <label className="flex items-center gap-2 rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={includeHistorical}
+              onChange={(event) => setIncludeHistorical(event.target.checked)}
+              className="h-4 w-4 accent-market-teal"
+            />
+            Include Historical
+          </label>
+          <label className="text-xs text-slate-400">
+            Historical Days
+            <select
+              value={historicalDays}
+              onChange={(event) => setHistoricalDays(event.target.value)}
+              disabled={!includeHistorical}
+              className="mt-1 w-full rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-market-teal/50 disabled:opacity-50"
+            >
+              {["90", "180", "365"].map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Historical Step
+            <select
+              value={historicalStep}
+              onChange={(event) => setHistoricalStep(event.target.value)}
+              disabled={!includeHistorical}
+              className="mt-1 w-full rounded-md border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-market-teal/50 disabled:opacity-50"
+            >
+              {["1", "5", "10"].map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </section>
 
       {loading ? <div className="rounded-xl border border-white/10 bg-ink-900/70 p-5 text-sm text-slate-400">Loading score promotion audit...</div> : null}
@@ -216,6 +292,15 @@ export function ScorePromotionAuditClient() {
             <MetricCard label="Not Ready" value={payload.summary.notReady} tone="gray" />
           </section>
 
+          {payload.summary.historicalSummary ? (
+            <section className="grid gap-3 md:grid-cols-4">
+              <MetricCard label="Historical Stable" value={payload.summary.historicalSummary.stableCount} tone="green" />
+              <MetricCard label="Historical Watch" value={payload.summary.historicalSummary.watchCount} tone="amber" />
+              <MetricCard label="Historical Unstable" value={payload.summary.historicalSummary.unstableCount} tone="red" />
+              <MetricCard label="Historical Unavailable" value={payload.summary.historicalSummary.unavailableCount} tone="gray" />
+            </section>
+          ) : null}
+
           {payload.globalNotes.length > 0 ? (
             <section className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-5">
               <h2 className="text-base font-semibold text-amber-100">Global Notes</h2>
@@ -235,7 +320,7 @@ export function ScorePromotionAuditClient() {
               <table className="min-w-[1200px] w-full border-collapse text-left text-xs">
                 <thead className="bg-white/[0.04] text-slate-400">
                   <tr>
-                    {["Score", "Decision", "Confidence", "V1", "V2", "Difference", "Direction", "Data Health", "Benchmark", "Recommended Next Action"].map((column) => (
+                    {["Score", "Decision", "Confidence", "V1", "V2", "Direction", "Data Health", "Benchmark", "Historical", "Sign Flips", "Large Moves", "Saturation", "Historical Availability", "Recommended Next Action"].map((column) => (
                       <th key={column} className="px-3 py-2 font-medium">{column}</th>
                     ))}
                   </tr>
@@ -251,11 +336,19 @@ export function ScorePromotionAuditClient() {
                       <td className="px-3 py-2"><Badge label={row.confidence} tone={confidenceTone(row.confidence)} /></td>
                       <td className="px-3 py-2">{formatDebugNumber(row.v1)}</td>
                       <td className="px-3 py-2">{formatDebugNumber(row.v2)}</td>
-                      <td className="px-3 py-2">{formatDebugNumber(row.difference)}</td>
                       <td className="px-3 py-2">{row.directionAgreement ?? "—"}</td>
                       <td className="px-3 py-2"><Badge label={row.dataHealth.status} tone={healthTone(row.dataHealth.status)} /></td>
                       <td className="px-3 py-2">
                         {row.benchmark ? <Badge label={row.benchmark.alignment} tone={benchmarkTone(row.benchmark.alignment)} /> : "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        {row.historical ? <Badge label={row.historical.stability} tone={historicalTone(row.historical.stability)} /> : "—"}
+                      </td>
+                      <td className="px-3 py-2">{row.historical?.signFlipCount ?? "—"}</td>
+                      <td className="px-3 py-2">{row.historical?.largeMoveCount ?? "—"}</td>
+                      <td className="px-3 py-2">{row.historical?.saturationCount ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        {row.historical ? `${row.historical.availableCount}/${row.historical.availableCount + row.historical.missingCount}` : "—"}
                       </td>
                       <td className="max-w-[320px] px-3 py-2 text-slate-500">{row.recommendedNextAction}</td>
                     </tr>
