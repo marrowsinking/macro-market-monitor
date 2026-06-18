@@ -20,6 +20,11 @@ const scoreDimensions = [
     items: ["High Yield Spread", "利差收窄", "利差擴大"],
   },
   {
+    title: "NFCI Benchmark / 金融條件基準",
+    body: "Chicago Fed NFCI 系列只作 benchmark / diagnostic，不直接進入 official score 或 regime。",
+    items: ["NFCI", "ANFCI", "NFCIRISK", "NFCICREDIT", "NFCILEVERAGE"],
+  },
+  {
     title: "Dollar Pressure / 美元壓力",
     body: "觀察全球美元流動性壓力，不只是美元升跌本身。",
     items: ["DXY", "USDJPY", "USDCNY", "2Y Treasury", "SOFR"],
@@ -249,6 +254,17 @@ export default function MethodologyPage() {
           </p>
           <p>
             利差收窄通常代表信用環境改善；利差擴大通常代表信用壓力上升。信用環境與風險偏好、流動性高度相關，但仍值得獨立觀察。
+          </p>
+        </Section>
+
+        <Section title="NFCI Benchmark / 金融條件基準">
+          <p>
+            Chicago Fed NFCI、ANFCI、NFCIRISK、NFCICREDIT 與 NFCILEVERAGE 目前只作 debug benchmark 和 promotion audit，不直接參與 official Dashboard score、
+            confirmed regime 或 alerts。
+          </p>
+          <p>
+            NFCI 數值越高，代表金融條件相對平均水平越緊；NFCI 越低或為負，代表金融條件越寬鬆。因此對照方向需要反轉：
+            liquidity_score 應對照 -NFCI，credit_score 應對照 -NFCICREDIT，risk_appetite_score 應對照 -NFCIRISK。
           </p>
         </Section>
 

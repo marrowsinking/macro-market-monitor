@@ -3,6 +3,8 @@ import type {
   MacroFactorConfig,
   MacroScoreKey,
 } from "@/lib/config/macroEngineConfig.types";
+import { classifyFreshness, type FreshnessStatus } from "@/lib/debug/freshnessPolicy";
+import { NFCI_BENCHMARK_SYMBOLS } from "@/lib/debug/nfciBenchmarkService";
 
 export type ConfiguredSymbolUsage = {
   symbol: string;
@@ -22,17 +24,34 @@ export type ConfiguredSymbolUsage = {
   }>;
 };
 
-export type CoverageStatus =
-  | "ok"
-  | "missing"
-  | "insufficient"
-  | "stale"
-  | "derived"
-  | "placeholder"
-  | "not_scored";
+const nfciBenchmarkNames: Record<(typeof NFCI_BENCHMARK_SYMBOLS)[number], string> = {
+  NFCI: "Chicago Fed National Financial Conditions Index",
+  ANFCI: "Chicago Fed Adjusted National Financial Conditions Index",
+  NFCIRISK: "Chicago Fed NFCI Risk Subindex",
+  NFCICREDIT: "Chicago Fed NFCI Credit Subindex",
+  NFCILEVERAGE: "Chicago Fed NFCI Leverage Subindex",
+};
+
+function nfciBenchmarkUsage(): ConfiguredSymbolUsage[] {
+  return NFCI_BENCHMARK_SYMBOLS.map((symbol) => ({
+    symbol,
+    name: nfciBenchmarkNames[symbol],
+    source: "FRED",
+    frequency: "weekly",
+    signalTransform: "level",
+    minObservations: 30,
+    preferredZScoreWindows: [252, 504],
+    usages: [],
+  }));
+}
+
+export type CoverageStatus = FreshnessStatus;
 
 export type CoverageRow = Omit<ConfiguredSymbolUsage, "transformLookbackDays"> & {
   status: CoverageStatus;
+  freshnessStatus: FreshnessStatus;
+  decayFactor: number;
+  freshnessMessage: string;
   observationCount: number;
   firstDate: string | null;
   latestDate: string | null;
@@ -47,6 +66,9 @@ export type CoverageRow = Omit<ConfiguredSymbolUsage, "transformLookbackDays"> &
 export type CoverageSummary = {
   totalConfiguredSymbols: number;
   okCount: number;
+  freshCount: number;
+  carriedForwardCount: number;
+  decayingCount: number;
   missingCount: number;
   insufficientCount: number;
   staleCount: number;
@@ -92,32 +114,8 @@ function daysSince(value: Date | string | null, now: Date): number | null {
   return Math.max(0, Math.floor((now.getTime() - date.getTime()) / DAY_MS));
 }
 
-function staleThreshold(frequency: string): number | null {
-  if (frequency === "daily_market" || frequency === "daily_rate") return 10;
-  if (frequency === "weekly") return 21;
-  if (frequency === "monthly_macro") return 75;
-  return null;
-}
-
 function uniqueScoreKeys(usages: ConfiguredSymbolUsage["usages"]): MacroScoreKey[] {
   return Array.from(new Set(usages.map((usage) => usage.scoreKey)));
-}
-
-function statusMessage(row: {
-  symbol: string;
-  status: CoverageStatus;
-  observationCount: number;
-  requiredMinimumObservations: number;
-  daysSinceLatest: number | null;
-  affectedScores: MacroScoreKey[];
-}): string {
-  if (row.status === "placeholder") return "Placeholder factor; data source is not connected yet.";
-  if (row.status === "derived") return "Derived factor; it is not expected to have direct database observations.";
-  if (row.status === "not_scored") return "Configured as not scored.";
-  if (row.status === "missing") return `${row.symbol} has no observations in database.`;
-  if (row.status === "insufficient") return `${row.symbol} has ${row.observationCount} observations, below required minimum ${row.requiredMinimumObservations}.`;
-  if (row.status === "stale") return `${row.symbol} latest observation is ${row.daysSinceLatest} days old.`;
-  return `${row.symbol} coverage is sufficient for ${row.affectedScores.join(", ")}.`;
 }
 
 function statusRank(status: CoverageStatus): number {
@@ -125,10 +123,12 @@ function statusRank(status: CoverageStatus): number {
     missing: 0,
     insufficient: 1,
     stale: 2,
-    ok: 3,
-    not_scored: 4,
-    derived: 5,
-    placeholder: 6,
+    decaying: 3,
+    carried_forward: 4,
+    fresh: 5,
+    not_scored: 6,
+    derived: 7,
+    placeholder: 8,
   };
   return ranks[status];
 }
@@ -173,6 +173,12 @@ export function collectConfiguredSymbolUsage(): ConfiguredSymbolUsage[] {
     }
   }
 
+  for (const benchmark of nfciBenchmarkUsage()) {
+    if (!bySymbol.has(benchmark.symbol)) {
+      bySymbol.set(benchmark.symbol, benchmark);
+    }
+  }
+
   return Array.from(bySymbol.values()).sort((a, b) => a.symbol.localeCompare(b.symbol));
 }
 
@@ -194,28 +200,21 @@ export function buildCoverageRows(params: {
       const affectedScores = uniqueScoreKeys(symbolConfig.usages);
       const requiredMinimumObservations = symbolConfig.minObservations;
       const preferredDefaultWindow = symbolConfig.preferredZScoreWindows[0] ?? null;
-      const threshold = staleThreshold(symbolConfig.frequency);
-      let status: CoverageStatus;
-
-      if (symbolConfig.source === "PLACEHOLDER" && symbolConfig.signalTransform === "not_scored") {
-        status = "placeholder";
-      } else if (symbolConfig.source === "DERIVED" || symbolConfig.signalTransform === "derived_ratio") {
-        status = "derived";
-      } else if (symbolConfig.signalTransform === "not_scored" || symbolConfig.usages.every((usage) => usage.scorePolarity === "not_scored")) {
-        status = "not_scored";
-      } else if (observationCount === 0) {
-        status = "missing";
-      } else if (observationCount < requiredMinimumObservations) {
-        status = "insufficient";
-      } else if (threshold !== null && daysSinceLatest !== null && daysSinceLatest > threshold) {
-        status = "stale";
-      } else {
-        status = "ok";
-      }
+      const freshness = classifyFreshness({
+        source: symbolConfig.source,
+        frequency: symbolConfig.frequency,
+        signalTransform: symbolConfig.signalTransform,
+        observationCount,
+        requiredMinimumObservations,
+        daysSinceLatest,
+      });
 
       const row: CoverageRow = {
         ...symbolConfig,
-        status,
+        status: freshness.status,
+        freshnessStatus: freshness.status,
+        decayFactor: freshness.decayFactor,
+        freshnessMessage: freshness.message,
         observationCount,
         firstDate,
         latestDate,
@@ -224,9 +223,11 @@ export function buildCoverageRows(params: {
         preferredDefaultWindow,
         transformLookbackDays: symbolConfig.transformLookbackDays ?? null,
         affectedScores,
-        message: "",
+        message:
+          symbolConfig.usages.length === 0 && freshness.status === "missing"
+            ? `${symbolConfig.symbol} benchmark data is missing. Run npm run seed and npm run fetch:fred.`
+            : `${symbolConfig.symbol} ${freshness.message}`,
       };
-      row.message = statusMessage(row);
       return row;
     })
     .sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.symbol.localeCompare(b.symbol));
@@ -247,7 +248,10 @@ export function buildCoverageSummary(rows: CoverageRow[]): CoverageSummary {
 
   return {
     totalConfiguredSymbols: rows.length,
-    okCount: count("ok"),
+    okCount: count("fresh"),
+    freshCount: count("fresh"),
+    carriedForwardCount: count("carried_forward"),
+    decayingCount: count("decaying"),
     missingCount: count("missing"),
     insufficientCount: count("insufficient"),
     staleCount: count("stale"),
@@ -273,7 +277,8 @@ export function createDataCoverageDebugPayload(params: {
 
   if (summary.missingCount > 0) warnings.push("Some configured symbols have no observations in database.");
   if (summary.insufficientCount > 0) warnings.push("Some configured symbols have insufficient observations.");
-  if (summary.staleCount > 0) warnings.push("Some configured symbols have stale observations.");
+  if (summary.decayingCount > 0) warnings.push("Some configured symbols are decaying based on frequency-aware freshness policy.");
+  if (summary.staleCount > 0) warnings.push("Some configured symbols are stale based on frequency-aware freshness policy.");
   if (rows.some((row) => row.symbol === "CNY=X" && row.status === "insufficient")) {
     warnings.push("CNY=X has insufficient observations and may weaken dollar_score diagnostics.");
   }

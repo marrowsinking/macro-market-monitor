@@ -23,6 +23,7 @@ export const categories = [
   "風險資產",
   "信用",
   "商品",
+  "Financial Conditions / Benchmark",
   "中國",
 ] as const;
 
@@ -46,6 +47,11 @@ export const indicatorCatalog: IndicatorSeed[] = [
   { name: "High Yield Spread", symbol: "BAMLH0A0HYM2", category: "信用", source: "FRED", fredSeriesId: "BAMLH0A0HYM2", frequency: "daily", description: "美國高收益債信用利差。", macroLogic: "擴大代表信用風險上升；收窄代表風險偏好改善。" },
   { name: "VIX", symbol: "VIXCLS", category: "風險資產", source: "FRED", fredSeriesId: "VIXCLS", frequency: "daily", description: "標普 500 隱含波動率。", macroLogic: "上升代表避險需求升高；下降代表風險偏好改善。" },
   { name: "WTI Crude Oil", symbol: "DCOILWTICO", category: "商品", source: "FRED", fredSeriesId: "DCOILWTICO", frequency: "daily", description: "WTI 原油現貨價格。", macroLogic: "上升支持再通脹和商品週期；急跌代表需求壓力。" },
+  { name: "Chicago Fed National Financial Conditions Index", symbol: "NFCI", category: "Financial Conditions / Benchmark", source: "FRED", fredSeriesId: "NFCI", frequency: "weekly", description: "Chicago Fed National Financial Conditions Index. Higher values mean financial conditions are tighter than average.", macroLogic: "Benchmark only: NFCI 上升代表金融條件偏緊；與 liquidity_score 方向相反。", status: "active", isScoreInput: false, isCoreIndicator: false },
+  { name: "Chicago Fed Adjusted National Financial Conditions Index", symbol: "ANFCI", category: "Financial Conditions / Benchmark", source: "FRED", fredSeriesId: "ANFCI", frequency: "weekly", description: "Chicago Fed Adjusted National Financial Conditions Index. Higher values mean financial conditions are tighter after adjusting for economic conditions.", macroLogic: "Benchmark only: ANFCI 用於觀察調整後金融條件，不直接參與 regime score。", status: "active", isScoreInput: false, isCoreIndicator: false },
+  { name: "Chicago Fed NFCI Risk Subindex", symbol: "NFCIRISK", category: "Financial Conditions / Benchmark", source: "FRED", fredSeriesId: "NFCIRISK", frequency: "weekly", description: "Chicago Fed NFCI risk subindex. Higher values indicate tighter risk conditions.", macroLogic: "Benchmark only: 與 risk_appetite_score 對照時方向相反，risk_appetite_score 偏正應對應 NFCIRISK 偏低。", status: "active", isScoreInput: false, isCoreIndicator: false },
+  { name: "Chicago Fed NFCI Credit Subindex", symbol: "NFCICREDIT", category: "Financial Conditions / Benchmark", source: "FRED", fredSeriesId: "NFCICREDIT", frequency: "weekly", description: "Chicago Fed NFCI credit subindex. Higher values indicate tighter credit conditions.", macroLogic: "Benchmark only: 與 credit_score 對照時方向相反，credit_score 偏正應對應 NFCICREDIT 偏低。", status: "active", isScoreInput: false, isCoreIndicator: false },
+  { name: "Chicago Fed NFCI Leverage Subindex", symbol: "NFCILEVERAGE", category: "Financial Conditions / Benchmark", source: "FRED", fredSeriesId: "NFCILEVERAGE", frequency: "weekly", description: "Chicago Fed NFCI leverage subindex. Higher values indicate tighter leverage conditions.", macroLogic: "Benchmark only: 用於觀察槓桿條件，不直接參與 regime score。", status: "active", isScoreInput: false, isCoreIndicator: false },
   { name: "FRED LBMA Gold Price", symbol: "GOLDAMGBD228NLBM", category: "商品", source: "DISABLED", fredSeriesId: null, frequency: "daily", description: "FRED LBMA gold series, currently not used. Gold regime logic uses Yahoo GC=F instead.", macroLogic: "Deprecated/disabled: do not use for current regime calculation." },
   { name: "FRED Silver Price", symbol: "SLVPRUSD", category: "商品", source: "DISABLED", fredSeriesId: null, frequency: "daily", description: "FRED silver series, currently not used. Silver regime logic uses Yahoo SI=F instead.", macroLogic: "Deprecated/disabled: do not use for current regime calculation." },
   { name: "Gold/Silver Ratio", symbol: "GOLD_SILVER_RATIO", category: "商品", source: "DERIVED", fredSeriesId: null, frequency: "daily", description: "Yahoo GC=F 除以 SI=F 的金銀比。", macroLogic: "高於 90 偏避險或工業需求偏弱；低於 60 可能代表白銀或商品週期偏熱。" },

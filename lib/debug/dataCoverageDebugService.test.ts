@@ -56,7 +56,7 @@ describe("dataCoverageDebugService", () => {
     });
   });
 
-  test("daily market data older than 10 days is stale", () => {
+  test("daily market data older than stale threshold is stale", () => {
     const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => item.symbol === "DX-Y.NYB");
     const rows = buildCoverageRows({
       configuredSymbols,
@@ -68,16 +68,18 @@ describe("dataCoverageDebugService", () => {
     expect(rows[0].daysSinceLatest).toBe(14);
   });
 
-  test("monthly macro data inside 75 days is ok when observation count is sufficient", () => {
+  test("monthly macro data at 48 days is carried forward when observation count is sufficient", () => {
     const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => item.symbol === "CPIAUCSL");
     const rows = buildCoverageRows({
       configuredSymbols,
-      dbStats: [{ symbol: "CPIAUCSL", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-05-01" }],
+      dbStats: [{ symbol: "CPIAUCSL", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-04-28" }],
       now: new Date("2026-06-15T00:00:00Z"),
     });
 
-    expect(rows[0].status).toBe("ok");
-    expect(rows[0].daysSinceLatest).toBe(45);
+    expect(rows[0].status).toBe("carried_forward");
+    expect(rows[0].freshnessStatus).toBe("carried_forward");
+    expect(rows[0].decayFactor).toBe(1);
+    expect(rows[0].daysSinceLatest).toBe(48);
   });
 
   test("summary counts rows and high impact issues include CNY=X insufficient", () => {
@@ -93,7 +95,7 @@ describe("dataCoverageDebugService", () => {
     const summary = buildCoverageSummary(rows);
 
     expect(summary.totalConfiguredSymbols).toBe(4);
-    expect(summary.okCount).toBe(1);
+    expect(summary.freshCount).toBe(1);
     expect(summary.insufficientCount).toBe(1);
     expect(summary.derivedCount).toBe(1);
     expect(summary.placeholderCount).toBe(1);
@@ -102,7 +104,7 @@ describe("dataCoverageDebugService", () => {
     ]);
   });
 
-  test("rows sort missing insufficient and stale before ok derived and placeholder", () => {
+  test("rows sort missing insufficient stale and decaying before fresh derived and placeholder", () => {
     const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["VIXCLS", "CNY=X", "DX-Y.NYB", "JPY=X", "GOLD_SILVER_RATIO", "CHINA_M2"].includes(item.symbol));
     const rows = buildCoverageRows({
       configuredSymbols,
@@ -119,13 +121,33 @@ describe("dataCoverageDebugService", () => {
     expect(rows.at(-1)?.status).toBe("placeholder");
   });
 
-  test("createDataCoverageDebugPayload adds warnings for missing insufficient stale and CNY=X", () => {
-    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["VIXCLS", "CNY=X", "DX-Y.NYB"].includes(item.symbol));
+  test("monthly macro data at 78 days is decaying and not a high impact issue", () => {
+    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["JTSJOL", "PCEPI", "PCEPILFE"].includes(item.symbol));
+    const rows = buildCoverageRows({
+      configuredSymbols,
+      dbStats: [
+        { symbol: "JTSJOL", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-03-29" },
+        { symbol: "PCEPI", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-03-29" },
+        { symbol: "PCEPILFE", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-03-29" },
+      ],
+      now: new Date("2026-06-15T00:00:00Z"),
+    });
+    const summary = buildCoverageSummary(rows);
+
+    expect(rows.map((row) => row.status)).toEqual(["decaying", "decaying", "decaying"]);
+    expect(summary.decayingCount).toBe(3);
+    expect(summary.staleCount).toBe(0);
+    expect(summary.highImpactIssues).toEqual([]);
+  });
+
+  test("createDataCoverageDebugPayload adds warnings for missing insufficient decaying stale and CNY=X", () => {
+    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => ["VIXCLS", "CNY=X", "DX-Y.NYB", "PCEPI"].includes(item.symbol));
     const payload = createDataCoverageDebugPayload({
       configuredSymbols,
       dbStats: [
         { symbol: "CNY=X", observationCount: 8, firstDate: "2026-06-01", latestDate: "2026-06-10" },
         { symbol: "DX-Y.NYB", observationCount: 100, firstDate: "2025-01-01", latestDate: "2026-06-01" },
+        { symbol: "PCEPI", observationCount: 120, firstDate: "2016-01-01", latestDate: "2026-03-29" },
       ],
       now: new Date("2026-06-15T00:00:00Z"),
     });
@@ -133,7 +155,8 @@ describe("dataCoverageDebugService", () => {
     expect(payload.engineVersion).toBe("data-coverage-debug");
     expect(payload.warnings).toContain("Some configured symbols have no observations in database.");
     expect(payload.warnings).toContain("Some configured symbols have insufficient observations.");
-    expect(payload.warnings).toContain("Some configured symbols have stale observations.");
+    expect(payload.warnings).toContain("Some configured symbols are decaying based on frequency-aware freshness policy.");
+    expect(payload.warnings).toContain("Some configured symbols are stale based on frequency-aware freshness policy.");
     expect(payload.warnings).toContain("CNY=X has insufficient observations and may weaken dollar_score diagnostics.");
   });
 
@@ -143,5 +166,53 @@ describe("dataCoverageDebugService", () => {
 
     expect(cny?.usages.map((usage) => usage.scoreKey)).toContain("dollar_score");
     expect(symbols.find((item) => item.symbol === "CNH=X")).toBeUndefined();
+  });
+
+  test("includes NFCI benchmark symbols as weekly benchmark diagnostics", () => {
+    const symbols = collectConfiguredSymbolUsage();
+    const nfci = symbols.find((item) => item.symbol === "NFCI");
+
+    expect(nfci).toMatchObject({
+      symbol: "NFCI",
+      source: "FRED",
+      frequency: "weekly",
+      signalTransform: "level",
+      minObservations: 30,
+    });
+    expect(nfci?.usages).toEqual([]);
+  });
+
+  test("NFCI weekly freshness policy is applied and not treated as placeholder", () => {
+    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => item.symbol === "NFCI");
+    const rows = buildCoverageRows({
+      configuredSymbols,
+      dbStats: [{ symbol: "NFCI", observationCount: 100, firstDate: "2024-01-01", latestDate: "2026-06-01" }],
+      now: new Date("2026-06-15T00:00:00Z"),
+    });
+
+    expect(rows[0]).toMatchObject({
+      symbol: "NFCI",
+      status: "carried_forward",
+      freshnessStatus: "carried_forward",
+      affectedScores: [],
+    });
+  });
+
+  test("missing NFCI is a benchmark data warning, not a score high impact issue", () => {
+    const configuredSymbols = collectConfiguredSymbolUsage().filter((item) => item.symbol === "NFCI");
+    const rows = buildCoverageRows({
+      configuredSymbols,
+      dbStats: [],
+      now: new Date("2026-06-15T00:00:00Z"),
+    });
+    const summary = buildCoverageSummary(rows);
+
+    expect(rows[0]).toMatchObject({
+      symbol: "NFCI",
+      status: "missing",
+      affectedScores: [],
+    });
+    expect(rows[0].message).toContain("benchmark data is missing");
+    expect(summary.highImpactIssues).toEqual([]);
   });
 });
