@@ -69,6 +69,17 @@ function MetricCard({ label, value, tone = "gray" }: { label: string; value: num
   );
 }
 
+function ScoreList({ label, scores, tone }: { label: string; scores: string[]; tone: Tone }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {scores.length > 0 ? scores.map((score) => <Badge key={score} label={score} tone={tone} />) : <span className="text-xs text-slate-600">—</span>}
+      </div>
+    </div>
+  );
+}
+
 export function StressWindowReplayClient() {
   const [payload, setPayload] = useState<StressWindowReplayResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,6 +245,38 @@ export function StressWindowReplayClient() {
                 </ul>
               ) : null}
 
+              <div className="mt-4 rounded-lg border border-white/10 bg-ink-950/60 p-4">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">Partial Reason Summary</h3>
+                    <p className="mt-1 text-sm text-slate-400">{window.partialReasons.summary}</p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {window.partialReasons.affectsPromotionReadiness
+                        ? "This partial status should be reviewed before using this score group for promotion."
+                        : "This partial status is not treated as a direct blocker for the selected focus scores."}
+                    </p>
+                  </div>
+                  <Badge
+                    label={`Affects Promotion Readiness: ${window.partialReasons.affectsPromotionReadiness ? "Yes" : "No"}`}
+                    tone={window.partialReasons.affectsPromotionReadiness ? "red" : "green"}
+                  />
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <ScoreList label="Focus Unavailable" scores={window.partialReasons.focusUnavailableScores} tone="red" />
+                  <ScoreList label="Non-focus Unavailable" scores={window.partialReasons.nonFocusUnavailableScores} tone="amber" />
+                  <ScoreList label="Focus Unstable" scores={window.partialReasons.focusUnstableScores} tone="red" />
+                  <ScoreList label="Non-focus Unstable" scores={window.partialReasons.nonFocusUnstableScores} tone="amber" />
+                  <ScoreList label="Expected Unavailable" scores={window.partialReasons.expectedUnavailableScores} tone="gray" />
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                  <span>missing scores: {window.partialReasons.missingScoreCount}</span>
+                  <span>focus missing: {window.partialReasons.focusMissingCount}</span>
+                  <span>non-focus missing: {window.partialReasons.nonFocusMissingCount}</span>
+                </div>
+              </div>
+
               <div className="mt-4 overflow-x-auto rounded-lg border border-white/10">
                 <table className="min-w-[1180px] w-full border-collapse text-left text-xs">
                   <thead className="bg-white/[0.04] text-slate-400">
@@ -245,7 +288,7 @@ export function StressWindowReplayClient() {
                   </thead>
                   <tbody className="divide-y divide-white/10">
                     {window.scoreSummaries.map((summary) => (
-                      <tr key={summary.scoreKey} className="text-slate-300">
+                      <tr key={summary.scoreKey} className={`text-slate-300 ${summary.focus ? "bg-cyan-500/[0.04]" : ""}`}>
                         <td className="px-3 py-2">
                           <div className="font-semibold text-white">{summary.label}</div>
                           <div className="font-mono text-[11px] text-slate-500">{summary.scoreKey}</div>

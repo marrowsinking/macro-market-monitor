@@ -28,6 +28,7 @@ function replayResult(params: {
   endDate: string;
   stability?: Partial<Record<MacroScoreKey, HistoricalReplayStability>>;
   availableCount?: Partial<Record<MacroScoreKey, number>>;
+  partialDates?: number;
 }): HistoricalReplayResult {
   const scoreSummaries = allScoreKeys.map((scoreKey) => {
     const stability = params.stability?.[scoreKey] ?? "stable";
@@ -49,6 +50,10 @@ function replayResult(params: {
     };
   });
 
+  const inferredPartialDates =
+    params.partialDates ??
+    (scoreSummaries.some((summary) => summary.stability === "unavailable" || summary.missingCount > 0) ? 12 : 0);
+
   return {
     generatedAt: "2026-06-20T00:00:00.000Z",
     engineVersion: "historical-replay-debug",
@@ -60,8 +65,8 @@ function replayResult(params: {
     },
     summary: {
       replayDates: 12,
-      successfulDates: 12,
-      partialDates: 0,
+      successfulDates: 12 - inferredPartialDates,
+      partialDates: inferredPartialDates,
       failedDates: 0,
       stableScores: scoreSummaries.filter((summary) => summary.stability === "stable").length,
       watchScores: scoreSummaries.filter((summary) => summary.stability === "watch").length,
@@ -167,7 +172,7 @@ describe("stressWindowReplayService", () => {
         }),
     });
 
-    expect(["unavailable", "watch"]).toContain(result.windows[0].verdict);
+    expect(["unavailable", "watch", "concern"]).toContain(result.windows[0].verdict);
   });
 
   test("stable and watch focus scores lead to pass_like", async () => {
@@ -220,5 +225,146 @@ describe("stressWindowReplayService", () => {
     });
 
     expect(result.windows[0].scoreSummaries.map((summary) => summary.scoreKey)).toEqual(allScoreKeys);
+  });
+
+  test("china_score unavailable only does not affect promotion readiness", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "covid_liquidity_shock_2020",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { china_score: "unavailable" },
+        }),
+    });
+
+    expect(result.windows[0].partialReasons.expectedUnavailableScores).toEqual(["china_score"]);
+    expect(result.windows[0].partialReasons.focusUnavailableScores).toEqual([]);
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(false);
+    expect(result.windows[0].partialReasons.summary).toContain("china_score");
+  });
+
+  test("non-focus unavailable only does not affect promotion readiness", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "covid_liquidity_shock_2020",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { inflation_score: "unavailable" },
+        }),
+    });
+
+    expect(result.windows[0].partialReasons.nonFocusUnavailableScores).toEqual(["inflation_score"]);
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(false);
+    expect(result.windows[0].partialReasons.summary).toContain("non-focus");
+  });
+
+  test("focus unavailable affects promotion readiness", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "covid_liquidity_shock_2020",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { liquidity_score: "unavailable" },
+        }),
+    });
+
+    expect(result.windows[0].partialReasons.focusUnavailableScores).toEqual(["liquidity_score"]);
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(true);
+    expect(result.windows[0].partialReasons.summary).toContain("focus scores are unavailable");
+  });
+
+  test("focus unstable affects promotion readiness", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "banking_stress_2023",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { credit_score: "unstable" },
+        }),
+    });
+
+    expect(result.windows[0].partialReasons.focusUnstableScores).toEqual(["credit_score"]);
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(true);
+    expect(result.windows[0].partialReasons.summary).toContain("Focus score instability");
+  });
+
+  test("multiple focus unavailable or unstable leans concern", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "banking_stress_2023",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: {
+            credit_score: "unavailable",
+            liquidity_score: "unstable",
+          },
+        }),
+    });
+
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(true);
+    expect(result.windows[0].verdict).toBe("concern");
+  });
+
+  test("partialReasons summary is populated", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "inflation_fed_hiking_2022",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) => replayResult({ startDate, endDate }),
+    });
+
+    expect(result.windows[0].partialReasons.summary.length).toBeGreaterThan(0);
+  });
+
+  test("fully ok window does not affect promotion readiness", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "inflation_fed_hiking_2022",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) => replayResult({ startDate, endDate, partialDates: 0 }),
+    });
+
+    expect(result.windows[0].status).toBe("ok");
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(false);
+    expect(result.windows[0].partialReasons.summary).toBe("All focus scores are available for this stress window.");
+  });
+
+  test("expected unavailable scores includes china_score", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "recent_high_rate_risk_on",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { china_score: "unavailable" },
+        }),
+    });
+
+    expect(result.windows[0].partialReasons.expectedUnavailableScores).toContain("china_score");
   });
 });

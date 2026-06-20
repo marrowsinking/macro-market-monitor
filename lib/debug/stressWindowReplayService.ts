@@ -116,8 +116,22 @@ export interface StressWindowReplayWindowResult {
     partialDates: number;
     failedDates: number;
   };
+  partialReasons: StressWindowPartialReasons;
   scoreSummaries: StressWindowScoreSummary[];
   notes: string[];
+}
+
+export interface StressWindowPartialReasons {
+  focusUnavailableScores: string[];
+  nonFocusUnavailableScores: string[];
+  focusUnstableScores: string[];
+  nonFocusUnstableScores: string[];
+  expectedUnavailableScores: string[];
+  missingScoreCount: number;
+  focusMissingCount: number;
+  nonFocusMissingCount: number;
+  affectsPromotionReadiness: boolean;
+  summary: string;
 }
 
 export interface StressWindowScoreSummary {
@@ -147,6 +161,7 @@ type RunReplay = (params: {
 }) => HistoricalReplayResult | Promise<HistoricalReplayResult>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const EXPECTED_UNAVAILABLE_SCORES = new Set<MacroScoreKey>(["china_score"]);
 
 const scoreLabels: Record<MacroScoreKey, string> = {
   liquidity_score: "流動性",
@@ -278,17 +293,77 @@ function unavailableScoreSummary(scoreKey: MacroScoreKey, focusScores: Set<Macro
   };
 }
 
-function verdictForWindow(status: StressWindowStatus, summaries: StressWindowScoreSummary[]): StressWindowVerdict {
+function isUnavailable(summary: StressWindowScoreSummary): boolean {
+  return summary.stability === "unavailable" || summary.availableCount === 0 || summary.interpretation === "unavailable";
+}
+
+function buildPartialReasons(status: StressWindowStatus, summaries: StressWindowScoreSummary[]): StressWindowPartialReasons {
+  const unavailable = summaries.filter(isUnavailable);
+  const focusUnavailableScores = unavailable.filter((summary) => summary.focus).map((summary) => summary.scoreKey);
+  const nonFocusUnavailableScores = unavailable.filter((summary) => !summary.focus).map((summary) => summary.scoreKey);
+  const focusUnstableScores = summaries
+    .filter((summary) => summary.focus && summary.stability === "unstable")
+    .map((summary) => summary.scoreKey);
+  const nonFocusUnstableScores = summaries
+    .filter((summary) => !summary.focus && summary.stability === "unstable")
+    .map((summary) => summary.scoreKey);
+  const expectedUnavailableScores = unavailable
+    .filter((summary) => EXPECTED_UNAVAILABLE_SCORES.has(summary.scoreKey as MacroScoreKey))
+    .map((summary) => summary.scoreKey);
+  const affectsPromotionReadiness = focusUnavailableScores.length > 0 || focusUnstableScores.length > 0;
+  const missingScoreCount = unavailable.length;
+  const focusMissingCount = focusUnavailableScores.length;
+  const nonFocusMissingCount = nonFocusUnavailableScores.length;
+
+  let summary = "All focus scores are available for this stress window.";
+  if (focusUnavailableScores.length > 0) {
+    summary = "Partial status affects promotion readiness because one or more focus scores are unavailable.";
+  } else if (focusUnstableScores.length > 0) {
+    summary = "Focus score instability requires review before promotion.";
+  } else if (
+    status === "partial" &&
+    expectedUnavailableScores.length > 0 &&
+    expectedUnavailableScores.length === missingScoreCount
+  ) {
+    summary = "Partial status is mainly caused by china_score, which is currently expected to be unavailable.";
+  } else if (status === "partial" && nonFocusUnavailableScores.length > 0) {
+    summary = "Partial status is caused by non-focus unavailable scores and does not directly block the selected stress-window focus.";
+  } else if (nonFocusUnstableScores.length > 0) {
+    summary = "Non-focus score instability is visible in this window but does not directly block the selected stress-window focus.";
+  }
+
+  return {
+    focusUnavailableScores,
+    nonFocusUnavailableScores,
+    focusUnstableScores,
+    nonFocusUnstableScores,
+    expectedUnavailableScores,
+    missingScoreCount,
+    focusMissingCount,
+    nonFocusMissingCount,
+    affectsPromotionReadiness,
+    summary,
+  };
+}
+
+function verdictForWindow(
+  status: StressWindowStatus,
+  summaries: StressWindowScoreSummary[],
+  partialReasons: StressWindowPartialReasons,
+): StressWindowVerdict {
   if (status === "failed") return "unavailable";
   const focusSummaries = summaries.filter((summary) => summary.focus);
   if (focusSummaries.length === 0) return "unavailable";
 
   const unavailableCount = focusSummaries.filter((summary) => summary.interpretation === "unavailable").length;
   const unstableCount = focusSummaries.filter((summary) => summary.stability === "unstable").length;
+  const focusIssueCount = partialReasons.focusUnavailableScores.length + partialReasons.focusUnstableScores.length;
 
+  if (focusIssueCount >= 2) return "concern";
   if (unavailableCount > focusSummaries.length / 2) return "unavailable";
   if (unstableCount >= 2) return "concern";
   if (unstableCount >= 1 || unavailableCount >= 1) return "watch";
+  if (status === "partial") return "watch";
   return "pass_like";
 }
 
@@ -336,6 +411,7 @@ async function buildWindowResult(params: {
       : unavailableScoreSummary(scoreKey, focusScores, "Replay did not return this score summary.");
   });
   const status = statusFromReplay(replay);
+  const partialReasons = buildPartialReasons(status, scoreSummaries);
 
   return {
     id: params.window.id,
@@ -343,7 +419,7 @@ async function buildWindowResult(params: {
     startDate: params.window.startDate,
     endDate: params.window.endDate,
     status,
-    verdict: verdictForWindow(status, scoreSummaries),
+    verdict: verdictForWindow(status, scoreSummaries, partialReasons),
     description: params.window.description,
     expectedFocus: params.window.expectedFocus,
     replaySummary: {
@@ -352,6 +428,7 @@ async function buildWindowResult(params: {
       partialDates: replay.summary.partialDates,
       failedDates: replay.summary.failedDates,
     },
+    partialReasons,
     scoreSummaries,
     notes: replay.globalNotes,
   };
@@ -360,6 +437,7 @@ async function buildWindowResult(params: {
 function failedWindowResult(window: ResolvedStressWindow, message: string): StressWindowReplayWindowResult {
   const focusScores = new Set(window.expectedFocus);
   const scoreSummaries = macroScoreKeys.map((scoreKey) => unavailableScoreSummary(scoreKey, focusScores, message));
+  const partialReasons = buildPartialReasons("failed", scoreSummaries);
 
   return {
     id: window.id,
@@ -376,6 +454,7 @@ function failedWindowResult(window: ResolvedStressWindow, message: string): Stre
       partialDates: 0,
       failedDates: 0,
     },
+    partialReasons,
     scoreSummaries,
     notes: [message],
   };
