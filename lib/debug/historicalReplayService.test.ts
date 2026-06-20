@@ -112,4 +112,29 @@ describe("historicalReplayService", () => {
     expect(result.summary.partialDates).toBe(result.rows.length);
     expect(result.summary.failedDates).toBe(0);
   });
+
+  test("service supports a custom replay date range without breaking days mode", () => {
+    const observationsBySymbol: ObservationSeriesMap = {
+      TEST: [
+        { date: "2026-01-01", value: 1 },
+        { date: "2026-01-05", value: 2 },
+        { date: "2026-01-10", value: 3 },
+      ],
+    };
+    const seenDates: string[] = [];
+    const result = buildHistoricalReplayResult({
+      observationsBySymbol,
+      params: { startDate: "2026-01-01", endDate: "2026-01-10", step: 4 },
+      generatedAt: new Date("2026-06-18T00:00:00Z"),
+      calculateScores: ({ asOfDate }) => {
+        seenDates.push(asOfDate);
+        return scores({});
+      },
+    });
+
+    expect(result.params.startDate).toBe("2026-01-01");
+    expect(result.params.endDate).toBe("2026-01-10");
+    expect(result.params.days).toBe(10);
+    expect(seenDates).toEqual(["2026-01-01", "2026-01-05", "2026-01-09", "2026-01-10"]);
+  });
 });

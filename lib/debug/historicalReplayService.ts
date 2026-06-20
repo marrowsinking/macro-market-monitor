@@ -59,6 +59,8 @@ export interface HistoricalReplayScoreSummary {
 export type HistoricalReplayParams = {
   days?: number | null;
   step?: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
 };
 
 type ScoreCalculator = (params: {
@@ -83,6 +85,12 @@ const scoreLabels: Record<MacroScoreKey, string> = {
 function dateKey(value: Date | string): string {
   const date = value instanceof Date ? value : new Date(value);
   return date.toISOString().slice(0, 10);
+}
+
+function parseDateKey(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function addDays(date: Date, days: number): Date {
@@ -224,6 +232,20 @@ export function buildReplayDates(params: { days: number; step: number; endDate: 
   return dates;
 }
 
+export function buildReplayDatesForRange(params: { startDate: Date; endDate: Date; step: number }): string[] {
+  const start = dateKey(params.startDate) <= dateKey(params.endDate) ? params.startDate : params.endDate;
+  const end = dateKey(params.startDate) <= dateKey(params.endDate) ? params.endDate : params.startDate;
+  const totalDays = Math.max(1, Math.floor((end.getTime() - start.getTime()) / DAY_MS) + 1);
+  const dates: string[] = [];
+
+  for (let offset = 0; offset < totalDays; offset += params.step) {
+    dates.push(dateKey(addDays(start, offset)));
+  }
+  const endKey = dateKey(end);
+  if (!dates.includes(endKey)) dates.push(endKey);
+  return dates;
+}
+
 export function filterObservationsAsOf(observationsBySymbol: ObservationSeriesMap, asOfDate: string): ObservationSeriesMap {
   const result: ObservationSeriesMap = {};
   for (const [symbol, points] of Object.entries(observationsBySymbol)) {
@@ -255,8 +277,17 @@ export function buildHistoricalReplayResult(params: {
   calculateScores?: ScoreCalculator;
 }): HistoricalReplayResult {
   const replayParams = clampReplayParams(params.params ?? {});
-  const endDate = params.endDate ?? new Date();
-  const dates = buildReplayDates({ ...replayParams, endDate });
+  const requestedStartDate = parseDateKey(params.params?.startDate);
+  const requestedEndDate = parseDateKey(params.params?.endDate);
+  const endDate = requestedEndDate ?? params.endDate ?? new Date();
+  const dates =
+    requestedStartDate || requestedEndDate
+      ? buildReplayDatesForRange({
+          startDate: requestedStartDate ?? addDays(endDate, -replayParams.days + 1),
+          endDate,
+          step: replayParams.step,
+        })
+      : buildReplayDates({ ...replayParams, endDate });
   const calculateScores = params.calculateScores ?? defaultScoreCalculator;
   const rows = dates.map((asOfDate) => {
     try {
@@ -290,9 +321,10 @@ export function buildHistoricalReplayResult(params: {
     generatedAt: (params.generatedAt ?? new Date()).toISOString(),
     engineVersion: "historical-replay-debug",
     params: {
-      ...replayParams,
+      days: dates.length > 0 ? Math.floor((new Date(`${dates[dates.length - 1]}T00:00:00Z`).getTime() - new Date(`${dates[0]}T00:00:00Z`).getTime()) / DAY_MS) + 1 : replayParams.days,
+      step: replayParams.step,
       startDate: dates[0],
-      endDate: dateKey(endDate),
+      endDate: dates[dates.length - 1] ?? dateKey(endDate),
     },
     summary: {
       replayDates: rows.length,
