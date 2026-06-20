@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   STRESS_WINDOWS,
+  type StressWindowAffectedFactorDiagnostic,
   type StressWindowInterpretation,
   type StressWindowReplayResult,
   type StressWindowStatus,
@@ -56,6 +57,20 @@ function stabilityTone(stability: string): Tone {
   return "gray";
 }
 
+function factorStatusTone(status: StressWindowAffectedFactorDiagnostic["status"]): Tone {
+  if (status === "ok") return "green";
+  if (status === "insufficient" || status === "insufficient_lookback" || status === "context_dependent") return "amber";
+  if (status === "missing" || status === "error") return "red";
+  return "gray";
+}
+
+function availabilityReasonTone(reason: string | undefined): Tone {
+  if (!reason || reason === "none") return "green";
+  if (reason === "not_scored") return "gray";
+  if (reason === "insufficient_lookback" || reason === "insufficient_observations") return "amber";
+  return "red";
+}
+
 function Badge({ label, tone }: { label: string; tone: Tone }) {
   return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${toneClass(tone)}`}>{label}</span>;
 }
@@ -76,6 +91,34 @@ function ScoreList({ label, scores, tone }: { label: string; scores: string[]; t
       <div className="flex flex-wrap gap-1.5">
         {scores.length > 0 ? scores.map((score) => <Badge key={score} label={score} tone={tone} />) : <span className="text-xs text-slate-600">—</span>}
       </div>
+    </div>
+  );
+}
+
+function AffectedFactors({ factors }: { factors: StressWindowAffectedFactorDiagnostic[] }) {
+  if (factors.length === 0) return <span className="text-slate-600">—</span>;
+  return (
+    <div className="space-y-2">
+      {factors.map((factor) => (
+        <div key={`${factor.symbol}-${factor.status}`} className="space-y-1 rounded-md border border-white/10 bg-black/10 p-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[11px] text-slate-200">{factor.symbol}</span>
+            <Badge label={factor.status} tone={factorStatusTone(factor.status)} />
+          </div>
+          <div className="text-[11px] leading-5 text-slate-500">
+            obs {factor.observationCount}
+            {" · "}
+            first {factor.firstDate ?? "—"}
+            {" · "}
+            latest {factor.latestDate ?? "—"}
+            {" · "}
+            min {factor.requiredMinObservations ?? "—"}
+            {" · "}
+            lookback {factor.requiredLookbackDays ?? "—"}
+          </div>
+          <div className="text-[11px] leading-5 text-slate-500">{factor.note}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -278,10 +321,10 @@ export function StressWindowReplayClient() {
               </div>
 
               <div className="mt-4 overflow-x-auto rounded-lg border border-white/10">
-                <table className="min-w-[1180px] w-full border-collapse text-left text-xs">
+                <table className="min-w-[1600px] w-full border-collapse text-left text-xs">
                   <thead className="bg-white/[0.04] text-slate-400">
                     <tr>
-                      {["Score", "Focus", "Interpretation", "Stability", "Average", "Min", "Max", "Latest", "Available", "Missing", "Sign Flips", "Large Moves", "Saturation", "Notes"].map((column) => (
+                      {["Score", "Focus", "Interpretation", "Stability", "Availability Reason", "Affected Factors", "Average", "Min", "Max", "Latest", "Available", "Missing", "Sign Flips", "Large Moves", "Saturation", "Notes"].map((column) => (
                         <th key={column} className="px-3 py-2 font-medium">{column}</th>
                       ))}
                     </tr>
@@ -296,6 +339,18 @@ export function StressWindowReplayClient() {
                         <td className="px-3 py-2">{summary.focus ? <Badge label="focus" tone="teal" /> : <span className="text-slate-500">—</span>}</td>
                         <td className="px-3 py-2"><Badge label={summary.interpretation} tone={interpretationTone(summary.interpretation)} /></td>
                         <td className="px-3 py-2"><Badge label={summary.stability} tone={stabilityTone(summary.stability)} /></td>
+                        <td className="px-3 py-2">
+                          <div className="space-y-1">
+                            <Badge
+                              label={summary.availabilityDiagnostics?.unavailableReason ?? "unknown"}
+                              tone={availabilityReasonTone(summary.availabilityDiagnostics?.unavailableReason)}
+                            />
+                            <div className="max-w-[240px] text-[11px] leading-5 text-slate-500">{summary.availabilityDiagnostics?.note ?? "—"}</div>
+                          </div>
+                        </td>
+                        <td className="min-w-[260px] px-3 py-2">
+                          <AffectedFactors factors={summary.availabilityDiagnostics?.affectedFactors ?? []} />
+                        </td>
                         <td className="px-3 py-2">{formatDebugNumber(summary.average)}</td>
                         <td className="px-3 py-2">{formatDebugNumber(summary.min)}</td>
                         <td className="px-3 py-2">{formatDebugNumber(summary.max)}</td>

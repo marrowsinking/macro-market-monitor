@@ -61,6 +61,7 @@ export type HistoricalReplayParams = {
   step?: number | null;
   startDate?: string | null;
   endDate?: string | null;
+  lookbackDays?: number | null;
 };
 
 type ScoreCalculator = (params: {
@@ -70,6 +71,7 @@ type ScoreCalculator = (params: {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NEUTRAL_THRESHOLD = 0.25;
+export const DEFAULT_REPLAY_LOOKBACK_DAYS = 1095;
 
 const scoreLabels: Record<MacroScoreKey, string> = {
   liquidity_score: "流動性",
@@ -246,10 +248,17 @@ export function buildReplayDatesForRange(params: { startDate: Date; endDate: Dat
   return dates;
 }
 
-export function filterObservationsAsOf(observationsBySymbol: ObservationSeriesMap, asOfDate: string): ObservationSeriesMap {
+export function filterObservationsAsOf(
+  observationsBySymbol: ObservationSeriesMap,
+  asOfDate: string,
+  fromDate?: string | null,
+): ObservationSeriesMap {
   const result: ObservationSeriesMap = {};
   for (const [symbol, points] of Object.entries(observationsBySymbol)) {
-    const filtered = points.filter((point) => dateKey(point.date) <= asOfDate);
+    const filtered = points.filter((point) => {
+      const pointDate = dateKey(point.date);
+      return pointDate <= asOfDate && (!fromDate || pointDate >= fromDate);
+    });
     if (filtered.length > 0) result[symbol] = filtered;
   }
   return result;
@@ -280,14 +289,18 @@ export function buildHistoricalReplayResult(params: {
   const requestedStartDate = parseDateKey(params.params?.startDate);
   const requestedEndDate = parseDateKey(params.params?.endDate);
   const endDate = requestedEndDate ?? params.endDate ?? new Date();
+  const hasCustomRange = Boolean(requestedStartDate || requestedEndDate);
   const dates =
-    requestedStartDate || requestedEndDate
+    hasCustomRange
       ? buildReplayDatesForRange({
           startDate: requestedStartDate ?? addDays(endDate, -replayParams.days + 1),
           endDate,
           step: replayParams.step,
         })
       : buildReplayDates({ ...replayParams, endDate });
+  const replayStartDate = dates[0] ? new Date(`${dates[0]}T00:00:00Z`) : endDate;
+  const lookbackDays = clamp(params.params?.lookbackDays, 0, 3650, DEFAULT_REPLAY_LOOKBACK_DAYS);
+  const dataStartDate = hasCustomRange ? dateKey(addDays(replayStartDate, -lookbackDays)) : null;
   const calculateScores = params.calculateScores ?? defaultScoreCalculator;
   const rows = dates.map((asOfDate) => {
     try {
@@ -295,7 +308,7 @@ export function buildHistoricalReplayResult(params: {
         asOfDate,
         calculateScores({
           asOfDate,
-          observationsBySymbol: filterObservationsAsOf(params.observationsBySymbol, asOfDate),
+          observationsBySymbol: filterObservationsAsOf(params.observationsBySymbol, asOfDate, dataStartDate),
         }),
       );
     } catch (error) {

@@ -1,12 +1,24 @@
-import { macroScoreKeys } from "@/lib/config/macroEngineConfig";
-import type { MacroScoreKey } from "@/lib/config/macroEngineConfig.types";
+import {
+  getMacroScoreConfig,
+  macroScoreKeys,
+} from "@/lib/config/macroEngineConfig";
+import type {
+  MacroFactorConfig,
+  MacroScoreKey,
+} from "@/lib/config/macroEngineConfig.types";
 import {
   buildHistoricalReplayResult,
+  DEFAULT_REPLAY_LOOKBACK_DAYS,
   type HistoricalReplayResult,
   type HistoricalReplayScoreSummary,
   type HistoricalReplayStability,
 } from "@/lib/debug/historicalReplayService";
-import type { ObservationSeriesMap } from "@/lib/engines/shadowScoreEngine";
+import {
+  calculateShadowFactorContribution,
+  type ObservationSeriesMap,
+  type ShadowContributionStatus,
+} from "@/lib/engines/shadowScoreEngine";
+import type { RawObservationPoint } from "@/lib/engines/normalizationEngine";
 
 export type StressWindowStatus = "ok" | "partial" | "failed";
 export type StressWindowVerdict = "pass_like" | "watch" | "concern" | "unavailable";
@@ -149,7 +161,43 @@ export interface StressWindowScoreSummary {
   largeMoveCount: number;
   saturationCount: number;
   interpretation: StressWindowInterpretation;
+  availabilityDiagnostics?: StressWindowAvailabilityDiagnostics;
   notes: string[];
+}
+
+export interface StressWindowAvailabilityDiagnostics {
+  unavailableReason:
+    | "none"
+    | "missing_observations"
+    | "insufficient_observations"
+    | "insufficient_lookback"
+    | "calculation_error"
+    | "not_scored"
+    | "unknown";
+  affectedFactors: StressWindowAffectedFactorDiagnostic[];
+  replayAvailableCount: number;
+  replayMissingCount: number;
+  firstAvailableReplayDate?: string | null;
+  lastAvailableReplayDate?: string | null;
+  note: string;
+}
+
+export interface StressWindowAffectedFactorDiagnostic {
+  symbol: string;
+  status:
+    | "ok"
+    | "missing"
+    | "insufficient"
+    | "insufficient_lookback"
+    | "not_scored"
+    | "context_dependent"
+    | "error";
+  observationCount: number;
+  firstDate?: string | null;
+  latestDate?: string | null;
+  requiredMinObservations?: number | null;
+  requiredLookbackDays?: number | null;
+  note: string;
 }
 
 type RunReplay = (params: {
@@ -176,6 +224,11 @@ const scoreLabels: Record<MacroScoreKey, string> = {
 
 function dateKey(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+function pointDateKey(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toISOString().slice(0, 10);
 }
 
 function addDays(date: Date, days: number): Date {
@@ -251,6 +304,7 @@ function interpretScore(summary: HistoricalReplayScoreSummary, focus: boolean): 
 function convertScoreSummary(
   summary: HistoricalReplayScoreSummary,
   focusScores: Set<MacroScoreKey>,
+  diagnostics?: StressWindowAvailabilityDiagnostics,
 ): StressWindowScoreSummary {
   const focus = focusScores.has(summary.scoreKey);
   return {
@@ -268,11 +322,17 @@ function convertScoreSummary(
     largeMoveCount: summary.largeMoveCount,
     saturationCount: summary.saturationCount,
     interpretation: interpretScore(summary, focus),
+    availabilityDiagnostics: diagnostics,
     notes: summary.notes,
   };
 }
 
-function unavailableScoreSummary(scoreKey: MacroScoreKey, focusScores: Set<MacroScoreKey>, note: string): StressWindowScoreSummary {
+function unavailableScoreSummary(
+  scoreKey: MacroScoreKey,
+  focusScores: Set<MacroScoreKey>,
+  note: string,
+  diagnostics?: StressWindowAvailabilityDiagnostics,
+): StressWindowScoreSummary {
   const focus = focusScores.has(scoreKey);
   return {
     scoreKey,
@@ -289,6 +349,7 @@ function unavailableScoreSummary(scoreKey: MacroScoreKey, focusScores: Set<Macro
     largeMoveCount: 0,
     saturationCount: 0,
     interpretation: "unavailable",
+    availabilityDiagnostics: diagnostics,
     notes: [note],
   };
 }
@@ -317,7 +378,18 @@ function buildPartialReasons(status: StressWindowStatus, summaries: StressWindow
 
   let summary = "All focus scores are available for this stress window.";
   if (focusUnavailableScores.length > 0) {
+    const focusUnavailableReasons = summaries
+      .filter((item) => item.focus && focusUnavailableScores.includes(item.scoreKey))
+      .map((item) => item.availabilityDiagnostics?.unavailableReason)
+      .filter(Boolean);
     summary = "Partial status affects promotion readiness because one or more focus scores are unavailable.";
+    if (focusUnavailableReasons.includes("insufficient_lookback")) {
+      summary += " Focus score availability may improve with a longer replay lookback buffer.";
+    } else if (focusUnavailableReasons.includes("missing_observations")) {
+      summary += " Focus score unavailable because of missing historical data.";
+    } else if (focusUnavailableReasons.includes("insufficient_observations")) {
+      summary += " Focus score unavailable because of insufficient historical observations.";
+    }
   } else if (focusUnstableScores.length > 0) {
     summary = "Focus score instability requires review before promotion.";
   } else if (
@@ -343,6 +415,167 @@ function buildPartialReasons(status: StressWindowStatus, summaries: StressWindow
     nonFocusMissingCount,
     affectsPromotionReadiness,
     summary,
+  };
+}
+
+function requiredLookbackDays(factor: MacroFactorConfig): number | null {
+  const preferredWindow = factor.preferredZScoreWindows[0] ?? null;
+  const transformLookback = factor.transformLookbackDays ?? 0;
+  if (preferredWindow === null && transformLookback === 0) return null;
+  return Math.max(preferredWindow ?? 0, transformLookback);
+}
+
+function scopedObservations(params: {
+  observations: RawObservationPoint[] | undefined;
+  startDate?: string | null;
+  endDate: string;
+}): RawObservationPoint[] {
+  return (params.observations ?? []).filter((point) => {
+    const key = pointDateKey(point.date);
+    return key <= params.endDate && (!params.startDate || key >= params.startDate);
+  });
+}
+
+function observationDateBounds(observations: RawObservationPoint[]): { firstDate: string | null; latestDate: string | null } {
+  if (observations.length === 0) return { firstDate: null, latestDate: null };
+  const dates = observations.map((point) => pointDateKey(point.date)).sort();
+  return { firstDate: dates[0], latestDate: dates[dates.length - 1] };
+}
+
+function mapFactorStatus(params: {
+  contributionStatus: ShadowContributionStatus;
+  allObservationsBeforeEnd: RawObservationPoint[];
+  scoped: RawObservationPoint[];
+  dataStartDate: string;
+  factor: MacroFactorConfig;
+}): StressWindowAffectedFactorDiagnostic["status"] {
+  if (params.contributionStatus === "ok") return "ok";
+  if (params.contributionStatus === "not_scored") return "not_scored";
+  if (params.contributionStatus === "context_dependent") return "context_dependent";
+  if (params.contributionStatus === "missing_observations") {
+    return params.allObservationsBeforeEnd.length > 0 && params.scoped.length === 0 ? "insufficient_lookback" : "missing";
+  }
+  if (params.contributionStatus === "insufficient_data") {
+    const hasOlderExcludedData = params.allObservationsBeforeEnd.some((point) => pointDateKey(point.date) < params.dataStartDate);
+    return hasOlderExcludedData ? "insufficient_lookback" : "insufficient";
+  }
+  return "error";
+}
+
+function factorNote(status: StressWindowAffectedFactorDiagnostic["status"], contributionMessage?: string): string {
+  if (status === "ok") return "Factor has enough observations for this replay date.";
+  if (status === "missing") return "No observations were found for this factor before the stress window end date.";
+  if (status === "insufficient_lookback") return "Historical observations exist, but the replay lookback buffer did not include enough usable data.";
+  if (status === "insufficient") return contributionMessage ?? "Observations exist, but there are not enough usable points for normalization.";
+  if (status === "not_scored") return "Factor is configured as not scored.";
+  if (status === "context_dependent") return "Factor is context-dependent and not directly scored.";
+  return contributionMessage ?? "Factor calculation returned an error or unsupported status.";
+}
+
+function buildFactorDiagnostic(params: {
+  scoreKey: MacroScoreKey;
+  groupKey: string;
+  factor: MacroFactorConfig;
+  observationsBySymbol: ObservationSeriesMap;
+  dataStartDate: string;
+  endDate: string;
+}): StressWindowAffectedFactorDiagnostic {
+  const allObservationsBeforeEnd = scopedObservations({
+    observations: params.observationsBySymbol[params.factor.symbol],
+    endDate: params.endDate,
+  });
+  const scoped = scopedObservations({
+    observations: params.observationsBySymbol[params.factor.symbol],
+    startDate: params.dataStartDate,
+    endDate: params.endDate,
+  });
+  const contribution = calculateShadowFactorContribution({
+    scoreKey: params.scoreKey,
+    groupKey: params.groupKey,
+    factor: params.factor,
+    observations: scoped,
+  });
+  const status = mapFactorStatus({
+    contributionStatus: contribution.status,
+    allObservationsBeforeEnd,
+    scoped,
+    dataStartDate: params.dataStartDate,
+    factor: params.factor,
+  });
+  const bounds = observationDateBounds(scoped);
+
+  return {
+    symbol: params.factor.symbol,
+    status,
+    observationCount: scoped.length,
+    firstDate: bounds.firstDate,
+    latestDate: bounds.latestDate,
+    requiredMinObservations: params.factor.minObservations,
+    requiredLookbackDays: requiredLookbackDays(params.factor),
+    note: factorNote(status, contribution.message),
+  };
+}
+
+function summarizeUnavailableReason(
+  scoreKey: MacroScoreKey,
+  summary: HistoricalReplayScoreSummary,
+  factors: StressWindowAffectedFactorDiagnostic[],
+): StressWindowAvailabilityDiagnostics["unavailableReason"] {
+  if (scoreKey === "china_score") return "not_scored";
+  if (summary.stability !== "unavailable" && summary.availableCount > 0) return "none";
+  if (factors.length === 0) return "unknown";
+  if (factors.every((factor) => factor.status === "not_scored")) return "not_scored";
+  if (factors.some((factor) => factor.status === "insufficient_lookback")) return "insufficient_lookback";
+  if (factors.some((factor) => factor.status === "insufficient")) return "insufficient_observations";
+  if (factors.every((factor) => factor.status === "missing")) return "missing_observations";
+  if (factors.some((factor) => factor.status === "error")) return "calculation_error";
+  return "unknown";
+}
+
+function availabilityNote(reason: StressWindowAvailabilityDiagnostics["unavailableReason"]): string {
+  if (reason === "none") return "Score was available during the replay window.";
+  if (reason === "missing_observations") return "Score is unavailable because required factor observations are missing.";
+  if (reason === "insufficient_lookback") return "Score may be unavailable because the replay lookback buffer lacks enough older observations.";
+  if (reason === "insufficient_observations") return "Score is unavailable because available observations are insufficient for normalization.";
+  if (reason === "calculation_error") return "Score is unavailable because one or more factors returned a calculation error.";
+  if (reason === "not_scored") return "Score is configured as not scored or placeholder.";
+  return "Score availability reason is unknown.";
+}
+
+function buildAvailabilityDiagnostics(params: {
+  scoreKey: MacroScoreKey;
+  summary: HistoricalReplayScoreSummary;
+  replay: HistoricalReplayResult;
+  window: ResolvedStressWindow;
+  observationsBySymbol: ObservationSeriesMap;
+  dataStartDate: string;
+}): StressWindowAvailabilityDiagnostics {
+  const config = getMacroScoreConfig(params.scoreKey);
+  const affectedFactors = config.factorGroups.flatMap((group) =>
+    group.factors.map((factor) =>
+      buildFactorDiagnostic({
+        scoreKey: params.scoreKey,
+        groupKey: group.key,
+        factor,
+        observationsBySymbol: params.observationsBySymbol,
+        dataStartDate: params.dataStartDate,
+        endDate: params.window.endDate,
+      }),
+    ),
+  );
+  const availableReplayDates = params.replay.rows
+    .filter((row) => row.scores[params.scoreKey] !== null)
+    .map((row) => row.date);
+  const unavailableReason = summarizeUnavailableReason(params.scoreKey, params.summary, affectedFactors);
+
+  return {
+    unavailableReason,
+    affectedFactors,
+    replayAvailableCount: params.summary.availableCount,
+    replayMissingCount: params.summary.missingCount,
+    firstAvailableReplayDate: availableReplayDates[0] ?? null,
+    lastAvailableReplayDate: availableReplayDates[availableReplayDates.length - 1] ?? null,
+    note: availabilityNote(unavailableReason),
   };
 }
 
@@ -385,6 +618,7 @@ function defaultRunReplay(params: {
       startDate: params.startDate,
       endDate: params.endDate,
       step: params.step,
+      lookbackDays: DEFAULT_REPLAY_LOOKBACK_DAYS,
     },
   });
 }
@@ -404,11 +638,22 @@ async function buildWindowResult(params: {
   });
   const focusScores = new Set(params.window.expectedFocus);
   const summariesByScore = new Map(replay.summary.scoreSummaries.map((summary) => [summary.scoreKey, summary]));
+  const dataStartDate = dateKey(addDays(new Date(`${params.window.startDate}T00:00:00Z`), -DEFAULT_REPLAY_LOOKBACK_DAYS));
   const scoreSummaries = macroScoreKeys.map((scoreKey) => {
     const summary = summariesByScore.get(scoreKey);
+    const diagnostics = summary
+      ? buildAvailabilityDiagnostics({
+          scoreKey,
+          summary,
+          replay,
+          window: params.window,
+          observationsBySymbol: params.observationsBySymbol,
+          dataStartDate,
+        })
+      : undefined;
     return summary
-      ? convertScoreSummary(summary, focusScores)
-      : unavailableScoreSummary(scoreKey, focusScores, "Replay did not return this score summary.");
+      ? convertScoreSummary(summary, focusScores, diagnostics)
+      : unavailableScoreSummary(scoreKey, focusScores, "Replay did not return this score summary.", diagnostics);
   });
   const status = statusFromReplay(replay);
   const partialReasons = buildPartialReasons(status, scoreSummaries);

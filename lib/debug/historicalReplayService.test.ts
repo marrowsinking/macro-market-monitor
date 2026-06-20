@@ -137,4 +137,50 @@ describe("historicalReplayService", () => {
     expect(result.params.days).toBe(10);
     expect(seenDates).toEqual(["2026-01-01", "2026-01-05", "2026-01-09", "2026-01-10"]);
   });
+
+  test("custom date range includes lookback observations before start date", () => {
+    const observationsBySymbol: ObservationSeriesMap = {
+      TEST: [
+        { date: "2025-12-20", value: 1 },
+        { date: "2025-12-31", value: 2 },
+        { date: "2026-01-01", value: 3 },
+        { date: "2026-01-05", value: 4 },
+        { date: "2026-01-11", value: 5 },
+      ],
+    };
+    const seenInputs: string[][] = [];
+    const result = buildHistoricalReplayResult({
+      observationsBySymbol,
+      params: { startDate: "2026-01-01", endDate: "2026-01-10", step: 5 },
+      calculateScores: ({ observationsBySymbol: scoped }) => {
+        seenInputs.push((scoped.TEST ?? []).map((point) => String(point.date)));
+        return scores({});
+      },
+    });
+
+    expect(result.rows.map((row) => row.date)).toEqual(["2026-01-01", "2026-01-06", "2026-01-10"]);
+    expect(seenInputs[0]).toEqual(["2025-12-20", "2025-12-31", "2026-01-01"]);
+    expect(seenInputs[0]).not.toContain("2026-01-05");
+  });
+
+  test("custom date range lookback buffer can exclude observations before data start", () => {
+    const observationsBySymbol: ObservationSeriesMap = {
+      TEST: [
+        { date: "2025-12-20", value: 1 },
+        { date: "2025-12-31", value: 2 },
+        { date: "2026-01-01", value: 3 },
+      ],
+    };
+    const seenInputs: string[][] = [];
+    buildHistoricalReplayResult({
+      observationsBySymbol,
+      params: { startDate: "2026-01-01", endDate: "2026-01-01", step: 1, lookbackDays: 1 },
+      calculateScores: ({ observationsBySymbol: scoped }) => {
+        seenInputs.push((scoped.TEST ?? []).map((point) => String(point.date)));
+        return scores({});
+      },
+    });
+
+    expect(seenInputs[0]).toEqual(["2025-12-31", "2026-01-01"]);
+  });
 });

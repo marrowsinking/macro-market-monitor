@@ -32,7 +32,7 @@ function replayResult(params: {
 }): HistoricalReplayResult {
   const scoreSummaries = allScoreKeys.map((scoreKey) => {
     const stability = params.stability?.[scoreKey] ?? "stable";
-    const availableCount = params.availableCount?.[scoreKey] ?? 12;
+    const availableCount = params.availableCount?.[scoreKey] ?? (stability === "unavailable" ? 0 : 12);
     return {
       scoreKey,
       label: scoreKey,
@@ -366,5 +366,93 @@ describe("stressWindowReplayService", () => {
     });
 
     expect(result.windows[0].partialReasons.expectedUnavailableScores).toContain("china_score");
+  });
+
+  test("missing factor observations produce missing_observations diagnostics", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "banking_stress_2023",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { credit_score: "unavailable" },
+        }),
+    });
+    const credit = result.windows[0].scoreSummaries.find((summary) => summary.scoreKey === "credit_score");
+
+    expect(credit?.availabilityDiagnostics?.unavailableReason).toBe("missing_observations");
+    expect(credit?.availabilityDiagnostics?.affectedFactors[0]).toMatchObject({
+      symbol: "BAMLH0A0HYM2",
+      status: "missing",
+      observationCount: 0,
+    });
+  });
+
+  test("insufficient historical lookback produces insufficient_lookback diagnostics", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {
+        BAMLH0A0HYM2: [
+          { date: "2018-01-01", value: 4 },
+          { date: "2018-01-02", value: 4.1 },
+        ],
+      },
+      requestedWindow: "banking_stress_2023",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { credit_score: "unavailable" },
+        }),
+    });
+    const credit = result.windows[0].scoreSummaries.find((summary) => summary.scoreKey === "credit_score");
+
+    expect(credit?.availabilityDiagnostics?.unavailableReason).toBe("insufficient_lookback");
+    expect(credit?.availabilityDiagnostics?.affectedFactors[0].status).toBe("insufficient_lookback");
+    expect(result.windows[0].partialReasons.summary).toContain("longer replay lookback buffer");
+  });
+
+  test("credit_score unavailable includes affected factor diagnostics", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "inflation_fed_hiking_2022",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { credit_score: "unavailable" },
+        }),
+    });
+    const credit = result.windows[0].scoreSummaries.find((summary) => summary.scoreKey === "credit_score");
+
+    expect(credit?.availabilityDiagnostics?.affectedFactors).toHaveLength(1);
+    expect(credit?.availabilityDiagnostics?.affectedFactors[0].symbol).toBe("BAMLH0A0HYM2");
+    expect(credit?.availabilityDiagnostics?.replayAvailableCount).toBe(0);
+    expect(credit?.availabilityDiagnostics?.replayMissingCount).toBe(12);
+  });
+
+  test("expected unavailable china_score remains non-blocking with diagnostics", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {},
+      requestedWindow: "recent_high_rate_risk_on",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { china_score: "unavailable" },
+        }),
+    });
+    const china = result.windows[0].scoreSummaries.find((summary) => summary.scoreKey === "china_score");
+
+    expect(china?.availabilityDiagnostics?.unavailableReason).toBe("not_scored");
+    expect(result.windows[0].partialReasons.affectsPromotionReadiness).toBe(false);
   });
 });
