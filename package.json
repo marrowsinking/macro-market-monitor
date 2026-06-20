@@ -15,6 +15,7 @@
     "fetch:yahoo": "tsx scripts/fetch-yahoo.ts",
     "backfill:cnh": "tsx scripts/backfill-cnh.ts",
     "backfill:cny": "tsx scripts/backfill-cny.ts",
+    "backfill:credit-spread": "tsx scripts/backfill-credit-spread.ts",
     "diagnose:yahoo-fx": "tsx scripts/diagnose-yahoo-fx-aliases.ts",
     "calculate:regime": "tsx scripts/calculate-regime.ts",
     "check:alerts": "tsx scripts/check-alerts.ts",

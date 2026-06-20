@@ -79,6 +79,17 @@ function replayResult(params: {
   };
 }
 
+function dailyCreditSpread(startDate: string, count: number) {
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(start.getTime() + index * 24 * 60 * 60 * 1000);
+    return {
+      date: date.toISOString().slice(0, 10),
+      value: 5 - index * 0.01,
+    };
+  });
+}
+
 describe("stressWindowReplayService", () => {
   test("predefined stress windows exist", () => {
     expect(STRESS_WINDOWS.map((window) => window.id)).toEqual([
@@ -435,6 +446,31 @@ describe("stressWindowReplayService", () => {
     expect(credit?.availabilityDiagnostics?.affectedFactors[0].symbol).toBe("BAMLH0A0HYM2");
     expect(credit?.availabilityDiagnostics?.replayAvailableCount).toBe(0);
     expect(credit?.availabilityDiagnostics?.replayMissingCount).toBe(12);
+  });
+
+  test("credit_score diagnostics are available when BAMLH0A0HYM2 history exists", async () => {
+    const result = await buildStressWindowReplayResult({
+      observationsBySymbol: {
+        BAMLH0A0HYM2: dailyCreditSpread("2023-01-01", 120),
+      },
+      requestedWindow: "banking_stress_2023",
+      step: 5,
+      today: new Date("2026-06-20T00:00:00Z"),
+      runReplay: ({ startDate, endDate }) =>
+        replayResult({
+          startDate,
+          endDate,
+          stability: { credit_score: "stable" },
+        }),
+    });
+    const credit = result.windows[0].scoreSummaries.find((summary) => summary.scoreKey === "credit_score");
+
+    expect(credit?.availabilityDiagnostics?.unavailableReason).toBe("none");
+    expect(credit?.availabilityDiagnostics?.affectedFactors[0]).toMatchObject({
+      symbol: "BAMLH0A0HYM2",
+      status: "ok",
+    });
+    expect(result.windows[0].partialReasons.focusUnavailableScores).not.toContain("credit_score");
   });
 
   test("expected unavailable china_score remains non-blocking with diagnostics", async () => {
